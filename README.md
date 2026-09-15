@@ -54,4 +54,4 @@ VITE_SUPABASE_ANON_KEY=your-publishable-or-anon-key
 
 6. In GitHub, open **Settings > Secrets and variables > Actions** and add repository secrets with the same two names. The Pages build and the weekly keepalive workflow use them.
 
-The keepalive workflow in `.github/workflows/supabase-keepalive.yml` sends one external request each week. It is intended to prevent inactivity pausing on the free tier; it is not a substitute for authentication or RLS.
+The keepalive workflow in `.github/workflows/supabase-keepalive.yml` sends an external request every three days and can also be run manually from GitHub Actions. It is intended to prevent inactivity pausing on the free tier; it is not a substitute for authentication or RLS.
