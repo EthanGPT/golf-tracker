@@ -4,6 +4,9 @@ import './App.css'
 import { CLUBS, DISTANCE_CLUBS, clubSummary, convertMetres, formatDate, recommendation, roundTotal, startOfWeek } from './domain'
 import type { AppData, ClubName, FocusCategory, Screen } from './domain'
 import { exportData, loadData, parseImport, saveData } from './storage'
+import { loadCloudData, saveCloudData } from './cloudStorage'
+import { isCloudConfigured, supabase } from './supabase'
+import type { Session } from '@supabase/supabase-js'
 
 const navItems: Array<{ id: Screen; label: string; icon: typeof Home }> = [
   { id: 'today', label: 'Today', icon: Home }, { id: 'range', label: 'Range', icon: Target }, { id: 'distances', label: 'Distances', icon: Gauge }, { id: 'round', label: 'Round', icon: CircleDot }, { id: 'progress', label: 'Progress', icon: Activity },
@@ -12,9 +15,13 @@ const categories: FocusCategory[] = ['Tee shot', 'Approach', 'Short game', 'Putt
 const emptyHole = (holeNumber: number) => ({ holeNumber, score: 0, focusCategory: 'Approach' as FocusCategory, wentRight: '', wentWrong: '' })
 
 function App() {
-  const [data, setData] = useState<AppData | null>(null); const [screen, setScreen] = useState<Screen>('distances'); const [selectedClub, setSelectedClub] = useState<ClubName>('7i'); const [distanceInput, setDistanceInput] = useState(''); const [mishit, setMishit] = useState(false); const distanceRef = useRef<HTMLInputElement>(null); const fileRef = useRef<HTMLInputElement>(null); const [roundDraft, setRoundDraft] = useState<AppData['rounds'][number] | null>(null); const [roundNotice, setRoundNotice] = useState('')
-  useEffect(() => { loadData().then(setData) }, []); useEffect(() => { if (data) saveData(data) }, [data])
+  const [data, setData] = useState<AppData | null>(null); const [session, setSession] = useState<Session | null>(null); const [authReady, setAuthReady] = useState(!isCloudConfigured); const [dataReady, setDataReady] = useState(false); const [screen, setScreen] = useState<Screen>('distances'); const [selectedClub, setSelectedClub] = useState<ClubName>('7i'); const [distanceInput, setDistanceInput] = useState(''); const [mishit, setMishit] = useState(false); const distanceRef = useRef<HTMLInputElement>(null); const fileRef = useRef<HTMLInputElement>(null); const [roundDraft, setRoundDraft] = useState<AppData['rounds'][number] | null>(null); const [roundNotice, setRoundNotice] = useState('')
+  useEffect(() => { if (!supabase) return; supabase.auth.getSession().then(({ data: auth }) => { setSession(auth.session); setAuthReady(true) }); const { data: listener } = supabase.auth.onAuthStateChange((_event, authSession) => setSession(authSession)); return () => listener.subscription.unsubscribe() }, [])
+  useEffect(() => { if (!authReady || (isCloudConfigured && !session)) return; let cancelled = false; (async () => { const cloudData = session ? await loadCloudData(session) : null; if (!cancelled) { setData(cloudData || await loadData()); setDataReady(true) } })().catch(() => loadData().then((localData) => { if (!cancelled) { setData(localData); setDataReady(true) } })); return () => { cancelled = true } }, [authReady, session])
+  useEffect(() => { if (!data || !dataReady) return; saveData(data); if (session) saveCloudData(session, data).catch(() => undefined) }, [data, dataReady, session])
   const currentHandicap = data?.handicapHistory.at(-1)?.index; const archivedRounds = data?.rounds.filter((round) => round.status === 'archived') || []; const latestRound = archivedRounds.at(-1); const rec = recommendation(archivedRounds)
+  if (!authReady) return <div className="loading">Connecting your notebook...</div>
+  if (isCloudConfigured && !session) return <AuthScreen />
   if (!data) return <div className="loading">Loading your notebook...</div>
   const updateData = (change: (current: AppData) => AppData) => setData((current) => current ? change(current) : current)
   const addReading = () => { const value = Number(distanceInput); if (!value || value <= 0) return; updateData((current) => ({ ...current, readings: [...current.readings, { id: crypto.randomUUID(), club: selectedClub, distanceMetres: Math.round(value), mishit, sessionDate: new Date().toISOString().slice(0, 10), createdAt: new Date().toISOString() }] })); setDistanceInput(''); setMishit(false); distanceRef.current?.focus() }
@@ -28,6 +35,30 @@ function App() {
   const importBackup = async (file: File) => { try { const imported = parseImport(await file.text()); if (window.confirm('Replace this device\'s local tracker data with the backup?')) setData(imported) } catch (error) { window.alert(error instanceof Error ? error.message : 'Could not restore this backup.') } }
   const screenTitle = navItems.find((item) => item.id === screen)?.label || 'Today'
   return <div className="app-shell"><header className="topbar"><div><p className="eyebrow">HERMANUS / GOLF NOTEBOOK</p><h1>{screenTitle}</h1></div><button className="icon-button" title="Backup and restore" onClick={() => setScreen('progress')}><Settings2 size={20} /></button></header><main className="main-content">{screen === 'today' && <Today data={data} currentHandicap={currentHandicap} latestRound={latestRound} recommendation={rec} go={setScreen} startRound={startRound} />}{screen === 'range' && <Range data={data} units="metres" setUnits={() => undefined} selectedClub={selectedClub} setSelectedClub={setSelectedClub} distanceInput={distanceInput} setDistanceInput={setDistanceInput} mishit={mishit} setMishit={setMishit} distanceRef={distanceRef} addReading={addReading} toggleMishit={toggleMishit} />}{screen === 'distances' && <Distances readings={data.readings} units="metres" setUnits={() => undefined} />}{screen === 'round' && <RoundMode draft={roundDraft} setDraft={setRoundDraft} notice={roundNotice} setNotice={setRoundNotice} startRound={startRound} saveHole={saveHole} archiveRound={archiveRound} />}{screen === 'progress' && <Progress data={data} recommendation={rec} updatePlan={updatePlan} recordHandicap={recordHandicap} downloadBackup={downloadBackup} fileRef={fileRef} importBackup={importBackup} />}</main><nav className="bottom-nav">{navItems.map(({ id, label, icon: Icon }) => <button key={id} className={screen === id ? 'active' : ''} onClick={() => setScreen(id)}><Icon size={20} /><span>{label}</span></button>)}</nav></div>
+}
+
+function AuthScreen() {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [notice, setNotice] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const signIn = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!supabase) return
+    setBusy(true); setNotice('')
+    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    setBusy(false); if (error) setNotice(error.message)
+  }
+
+  const signUp = async () => {
+    if (!supabase) return
+    setBusy(true); setNotice('')
+    const { error } = await supabase.auth.signUp({ email, password })
+    setBusy(false); setNotice(error ? error.message : 'Check your email to confirm your account.')
+  }
+
+  return <div className="auth-screen"><div className="auth-card"><span className="tag">PRIVATE GOLF NOTEBOOK</span><h2>Sign in to your distances.</h2><p>Use the same account on your phone and computer. Your rows are protected by Supabase RLS.</p><form onSubmit={signIn}><label>Email<input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} required /></label><label>Password<input type="password" autoComplete="current-password" minLength={6} value={password} onChange={(event) => setPassword(event.target.value)} required /></label><button className="primary-button" disabled={busy}>{busy ? 'Connecting...' : 'Sign in'}</button></form><button className="text-button" onClick={signUp} disabled={busy}>Create account</button>{notice && <p className="notice">{notice}</p>}</div></div>
 }
 
 function Today({ data, currentHandicap, latestRound, recommendation: rec, go, startRound }: { data: AppData; currentHandicap?: number; latestRound?: AppData['rounds'][number]; recommendation: ReturnType<typeof recommendation>; go: (screen: Screen) => void; startRound: () => void }) { const week = [data.weeklyPlan.practiceAComplete, data.weeklyPlan.practiceBComplete, data.weeklyPlan.roundComplete].filter(Boolean).length; return <div className="stack fade-in"><section className="intro"><span className="tag">YOUR NEXT SHOT</span><h2>Small notes. Better golf.</h2><p>Keep the useful numbers close while you practise and play.</p></section><div className="quick-grid"><button onClick={() => go('distances')}><Gauge /><span>View distances</span><ChevronRight /></button><button onClick={() => go('range')}><Target /><span>Start range session</span><ChevronRight /></button><button onClick={startRound}><CircleDot /><span>Start nine-hole round</span><ChevronRight /></button></div><section className="metric-grid"><div className="metric"><span>Handicap index</span><strong>{currentHandicap ?? 'No data'}</strong></div><div className="metric"><span>Latest nine-hole</span><strong>{latestRound?.totalScore ?? 'No round'}</strong></div><div className="metric"><span>This week</span><strong>{week} <small>of 3</small></strong></div></section><section className="panel feedback"><div className="section-heading"><div><span className="eyebrow">LATEST FEEDBACK</span><h3>{rec.text}</h3></div><Activity size={22} /></div><p>{rec.evidence || 'Complete a nine-hole round with a quick note on each hole to unlock evidence-based feedback.'}</p></section><section className="focus-line"><span className="eyebrow">RECOMMENDED NEXT FOCUS</span><strong>{rec.text}</strong></section></div> }
