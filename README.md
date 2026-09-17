@@ -55,3 +55,8 @@ VITE_SUPABASE_ANON_KEY=your-publishable-or-anon-key
 6. In GitHub, open **Settings > Secrets and variables > Actions** and add repository secrets with the same two names. The Pages build and the weekly keepalive workflow use them.
 
 The keepalive workflow in `.github/workflows/supabase-keepalive.yml` sends an external request every three days and can also be run manually from GitHub Actions. It is intended to prevent inactivity pausing on the free tier; it is not a substitute for authentication or RLS.
+## Hermanus course GPS layer
+
+Round mode now supports the Hermanus East, North, and South loops, 9- or 18-hole rounds, and tee selection. Course geometry is intentionally stored separately in `src/course.ts`. Green, tee, bunker, and hazard coordinates will be added only after checking them against current imagery; played GPS samples can then be used to refine them.
+
+No SQL migration is required for the current Supabase setup. Round metadata and future GPS samples are stored inside the existing `user_data.data` JSON document.

@@ -19,6 +19,10 @@ export type RoundHole = {
   focusCategory: FocusCategory
   wentRight: string
   wentWrong: string
+  tracking?: {
+    samples: { latitude: number; longitude: number; accuracy: number; recordedAt: string }[]
+    lastAccuracy?: number
+  }
 }
 
 export type Round = {
@@ -30,6 +34,9 @@ export type Round = {
   overallNote: string
   status: 'in-progress' | 'archived'
   holes: RoundHole[]
+  loop?: 'east' | 'north' | 'south'
+  roundLength?: 9 | 18
+  tee?: 'white' | 'yellow' | 'red'
   archivedAt?: string
 }
 
