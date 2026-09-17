@@ -2,6 +2,8 @@ export const CLUBS = ['Dr', '3W', '5W', '6i', '7i', '8i', '9i', 'PW', 'SW'] as c
 export const DISTANCE_CLUBS = ['6i', '7i', '8i', '9i', 'PW', 'SW', 'Dr', '3W', '5W'] as const
 export type ClubName = typeof CLUBS[number]
 export type FocusCategory = 'Tee shot' | 'Approach' | 'Short game' | 'Putting' | 'Course management'
+export type RoundCategory = 'drive' | 'wood' | 'iron' | 'chip' | 'putt'
+export type RoundTag = { category: RoundCategory; outcome: string; type: 'went-right' | 'went-wrong' }
 export type Screen = 'today' | 'range' | 'distances' | 'round' | 'progress'
 
 export type RangeReading = {
@@ -19,6 +21,8 @@ export type RoundHole = {
   focusCategory: FocusCategory
   wentRight: string
   wentWrong: string
+  tags?: RoundTag[]
+  note?: string
   tracking?: {
     samples: { latitude: number; longitude: number; accuracy: number; recordedAt: string }[]
     lastAccuracy?: number
@@ -133,8 +137,17 @@ export function categoryCounts(rounds: Round[]) {
 }
 
 export function recommendation(rounds: Round[]) {
-  const counts = categoryCounts(rounds)
-  const [category, count] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0] || []
-  if (!category || !count) return { text: 'Not enough round feedback yet to recommend a focus.', evidence: '' }
-  return { text: CATEGORY_GUIDANCE[category as FocusCategory], evidence: `${category} was tagged as the problem ${count} time${count === 1 ? '' : 's'} in your archived feedback.` }
+  const recent = rounds.filter((round) => round.status === 'archived').slice(-3)
+  const problems = recent.flatMap((round) => round.holes.flatMap((hole) => (hole.tags || []).filter((tag) => tag.type === 'went-wrong')))
+  if (problems.length < 2) {
+    const legacy = recent.flatMap((round) => round.holes).filter((hole) => hole.wentWrong.trim())
+    if (legacy.length) { const counts = legacy.reduce<Record<string, number>>((all, hole) => { all[hole.focusCategory] = (all[hole.focusCategory] || 0) + 1; return all }, {}); const [category, count] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]; if (category) return { text: CATEGORY_GUIDANCE[category as FocusCategory], evidence: `${category} was mentioned as a problem ${count} time${count === 1 ? '' : 's'} in recent feedback.` } }
+    return { text: 'Not enough repeated feedback yet.', evidence: 'Complete more rounds using the quick tags to reveal a reliable pattern.' }
+  }
+  const groups = problems.reduce<Record<string, { count: number; outcomes: Record<string, number> }>>((all, tag) => { const group = all[tag.category] || { count: 0, outcomes: {} }; group.count += 1; group.outcomes[tag.outcome] = (group.outcomes[tag.outcome] || 0) + 1; all[tag.category] = group; return all }, {})
+  const [category, group] = Object.entries(groups).sort((a, b) => b[1].count - a[1].count)[0]
+  const [outcome, outcomeCount] = Object.entries(group.outcomes).sort((a, b) => b[1] - a[1])[0]
+  const label = category[0].toUpperCase() + category.slice(1)
+  const focus = category === 'drive' ? 'contact and finding playable fairways' : category === 'iron' ? 'distance control' : category === 'putt' ? 'green reading and speed' : `${category} consistency`
+  return { text: `${label} is the main leak right now.`, evidence: `You recorded ${group.count} ${category} problems across your last ${recent.length} rounds, mostly ${outcome} (${outcomeCount}). Focus your next practice on ${focus}.` }
 }
