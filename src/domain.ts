@@ -57,6 +57,7 @@ export type AppData = {
   readings: RangeReading[]
   rounds: Round[]
   weeklyPlan: WeeklyPlan
+  weeklyHistory?: WeeklyPlan[]
 }
 
 export const SEED_READINGS: Array<[ClubName, number[]]> = [
@@ -121,7 +122,7 @@ export function seedData(): AppData {
     sessionDate: '2026-09-14',
     createdAt,
   })))
-  return { schemaVersion: 1, handicapHistory: [{ id: 'seed-handicap', date: '2026-09-14', index: 16.5 }], readings, rounds: [], weeklyPlan: { weekStart: startOfWeek(), practiceAComplete: false, practiceBComplete: false, roundComplete: false } }
+  return { schemaVersion: 1, handicapHistory: [{ id: 'seed-handicap', date: '2026-09-14', index: 16.5 }], readings, rounds: [], weeklyPlan: { weekStart: startOfWeek(), practiceAComplete: false, practiceBComplete: false, roundComplete: false }, weeklyHistory: [] }
 }
 
 export function roundTotal(round: Round) {
