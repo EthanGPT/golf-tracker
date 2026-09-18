@@ -23,3 +23,10 @@ export const holePar = (hole: number) => HERMANUS_PARS[hole - 1] || 4
 // Deliberately empty until each hole is checked against current imagery. This
 // prevents the app from presenting made-up GPS distances as if they were exact.
 export const HERMANUS_GEOMETRY: Record<number, HoleGeometry> = {}
+
+export const HERMANUS_HOLE_DIAGRAMS: Record<number, string> = {
+  1: '⛳\n  \\\n   \\  🟡\n    \\\n     \\\n   🟡 \\  \n       \\\n        │\n        │\n       🟩',
+  2: '⛳\n│\n│  🟡\n│\n🟡\n│\n│\n🟩', 3: '⛳  🟡\n│\n│\n│\n│\n🟩', 4: '    ⛳\n   /\n  /\n /  🟡\n/\n│\n🟩', 5: '⛳\n│\n│  🔵\n│\n│\n🟩', 6: '⛳  🟡\n│\n│  🟡\n│\n🟩', 7: '⛳\n│\n│\n🟡\n│\n│\n🟩', 8: '⛳  🟡\n│\n│  🟡\n│\n🟩', 9: '⛳\n│  \\\n│   \\  🟡\n│    \\\n🟡   │\n     🟩',
+  10: '⛳\n│\n│  🟡\n│\n🟡\n│\n│\n🟩', 11: '⛳  🟡\n│\n│\n│\n│\n🟩', 12: '  ⛳\n /\n/  🟡\n\\\n \\  🟡\n  \\\n  │\n  🟩', 13: '⛳\n│  🟡\n│\n│  🔵\n│\n🟩', 14: '⛳  🟡\n│\n│  🟡\n│\n🟩', 15: '    ⛳\n   /\n  /  🟡\n /\n/  🟡\n│\n🟩', 16: '⛳\n│\n│  🔵\n│\n│\n🟩', 17: '⛳  🟡\n│\n│\n│\n│\n🟩', 18: '⛳\n│\n│  🟡\n│\n🟡\n│\n│\n🟩',
+  19: '⛳  🟡\n│\n│  🟡\n│\n🟩', 20: '⛳\n  \\\n   \\  🟡\n    \\\n     \\\n   🟡 \\  \n       \\\n        │\n        │\n       🟩', 21: '⛳  🟡\n│\n│\n│\n│\n🟩', 22: '⛳\n│\n│  🔵\n│\n🟡\n│\n│\n🟩', 23: '    ⛳\n   /\n  /  🟡\n /\n/\n│\n🟩', 24: '⛳  🟡\n│\n│  🟡\n│\n🟩', 25: '⛳\n│\n│  🟡\n│\n│\n🟩', 26: '⛳  🟡\n│\n│  🔵\n│\n🟩', 27: '⛳\n│  \\\n│   \\  🟡\n│    \\\n🟡   │\n     🟩',
+}
