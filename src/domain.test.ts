@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CLUBS, DISTANCE_CLUBS, SEED_READINGS, categoryCounts, clubSummary, convertMetres, median, recommendation, roundTotal, seedData } from './domain'
+import { CLUBS, DISTANCE_CLUBS, SEED_READINGS, categoryCounts, clubSummary, caddiePlan, convertMetres, median, recommendation, roundTotal, seedData } from './domain'
 
 describe('distance calculations', () => {
   const data = seedData()
@@ -14,6 +14,12 @@ describe('distance calculations', () => {
   it('keeps empty clubs empty in bag order', () => { expect(CLUBS.slice(0, 3)).toEqual(['Dr', '3W', '4W-Hybrid']); expect(CLUBS.slice(0, 3).every((club) => !clubSummary(data.readings, club).typical)).toBe(true) })
   it('starts the on-course distance list at the lowest iron', () => expect(DISTANCE_CLUBS).toEqual(['6i', '7i', '8i', '9i', 'PW', 'SW', 'Dr', '3W', '4W-Hybrid']))
   it('contains the requested seed readings', () => expect(SEED_READINGS).toHaveLength(6))
+  it('keeps tee-only woods and driver out of fairway sequencing', () => {
+    const readings = (['Dr', '3W', '4W-Hybrid', '7i', '8i'] as const).flatMap((club, clubIndex) => Array.from({ length: 5 }, (_, index) => ({ id: `${club}-${index}`, club, distanceMetres: club === 'Dr' ? 210 : club === '3W' ? 190 : club === '4W-Hybrid' ? 175 : club === '7i' ? 140 : 130, mishit: false, playable: club !== '3W', severeMiss: false, sessionDate: '2026-09-19', createdAt: `2026-09-19T00:0${clubIndex}:${index}Z` })))
+    const plan = caddiePlan(readings, 4, 380)
+    expect(plan?.sequence.slice(1).map((shot) => shot.club)).not.toContain('Dr')
+    expect(plan?.sequence.slice(1).map((shot) => shot.club)).not.toContain('3W')
+  })
 })
 
 describe('round feedback', () => {

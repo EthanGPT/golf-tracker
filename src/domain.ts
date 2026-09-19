@@ -114,17 +114,19 @@ export function caddiePlan(readings: RangeReading[], par: number, targetDistance
   }).sort((a, b) => b.carry - a.carry)
   const teePool = stats.filter((item) => ['Dr', '3W', '4W-Hybrid'].includes(item.club))
   const tee = (teePool.length ? teePool : stats).slice().sort((a, b) => (b.playable - b.severe * 1.5) - (a.playable - a.severe * 1.5))[0]
+  // Driver and 3W are tee clubs. 4W-Hybrid remains available from the fairway.
+  const fairwayClubs = stats.filter((item) => !['Dr', '3W'].includes(item.club))
   const sequence: typeof stats = []
   let remaining = targetDistance
   if (par === 3) sequence.push(stats.slice().sort((a, b) => Math.abs(a.carry - targetDistance) - Math.abs(b.carry - targetDistance))[0])
   else {
     sequence.push(tee); remaining -= tee.carry
-    const approach = stats.filter((item) => item.club !== tee.club).sort((a, b) => Math.abs(remaining - a.carry) - Math.abs(remaining - b.carry))[0]
-    if (approach) { sequence.push(approach); remaining -= approach.carry }
     if (par === 5 && remaining > 25) {
-      const layup = stats.filter((item) => item.club !== tee.club && item.club !== approach?.club).sort((a, b) => Math.abs(remaining - a.carry) - Math.abs(remaining - b.carry))[0]
-      if (layup) sequence.splice(1, 0, layup)
+      const layup = fairwayClubs.filter((item) => item.club !== tee.club && item.carry <= remaining).sort((a, b) => b.carry - a.carry)[0]
+      if (layup) { sequence.push(layup); remaining -= layup.carry }
     }
+    const approach = fairwayClubs.filter((item) => !sequence.some((shot) => shot.club === item.club)).sort((a, b) => Math.abs(remaining - a.carry) - Math.abs(remaining - b.carry))[0]
+    if (approach) sequence.push(approach)
   }
   return { tee, sequence }
 }
