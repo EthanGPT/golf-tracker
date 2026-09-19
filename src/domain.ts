@@ -1,5 +1,5 @@
-export const CLUBS = ['Dr', '3W', '5W', '6i', '7i', '8i', '9i', 'PW', 'SW'] as const
-export const DISTANCE_CLUBS = ['6i', '7i', '8i', '9i', 'PW', 'SW', 'Dr', '3W', '5W'] as const
+export const CLUBS = ['Dr', '3W', '4W-Hybrid', '6i', '7i', '8i', '9i', 'PW', 'SW'] as const
+export const DISTANCE_CLUBS = ['6i', '7i', '8i', '9i', 'PW', 'SW', 'Dr', '3W', '4W-Hybrid'] as const
 export type ClubName = typeof CLUBS[number]
 export type FocusCategory = 'Tee shot' | 'Approach' | 'Short game' | 'Putting' | 'Course management'
 export type RoundCategory = 'drive' | 'wood' | 'iron' | 'chip' | 'putt'
@@ -11,6 +11,8 @@ export type RangeReading = {
   club: ClubName
   distanceMetres: number
   mishit: boolean
+  playable?: boolean
+  severeMiss?: boolean
   sessionDate: string
   createdAt: string
 }
@@ -85,15 +87,46 @@ export function median(values: number[]) {
 }
 
 export function clubSummary(readings: RangeReading[], club: ClubName) {
-  const usable = readings.filter((reading) => reading.club === club && !reading.mishit)
+  const usable = readings.filter((reading) => reading.club === club && !reading.severeMiss)
   const distances = usable.map((reading) => reading.distanceMetres)
   return {
     typical: median(distances),
     min: distances.length ? Math.min(...distances) : undefined,
     max: distances.length ? Math.max(...distances) : undefined,
     usableCount: distances.length,
+    playableCount: readings.filter((reading) => reading.club === club && reading.playable !== false).length,
+    playablePercentage: readings.filter((reading) => reading.club === club).length ? Math.round(readings.filter((reading) => reading.club === club && reading.playable !== false).length / readings.filter((reading) => reading.club === club).length * 100) : undefined,
+    severeMissPercentage: readings.filter((reading) => reading.club === club).length ? Math.round(readings.filter((reading) => reading.club === club && reading.severeMiss === true).length / readings.filter((reading) => reading.club === club).length * 100) : undefined,
     readings: readings.filter((reading) => reading.club === club).sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
   }
+}
+
+export function caddiePlan(readings: RangeReading[], par: number, targetDistance: number) {
+  const clubs = CLUBS.map((club) => ({ club, summary: clubSummary(readings, club) })).filter(({ summary }) => summary.typical)
+  if (!clubs.length) return undefined
+  const stats = clubs.map(({ club, summary }) => {
+    const clubReadings = readings.filter((reading) => reading.club === club)
+    const recent = clubReadings.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 20)
+    const rate = (items: RangeReading[], key: 'playable' | 'severeMiss', inverse = false) => items.length ? items.filter((item) => inverse ? item[key] !== true : item[key] === true || (key === 'playable' && item[key] === undefined)).length / items.length : 0
+    const playable = rate(clubReadings, 'playable') * 0.7 + (recent.length >= 5 ? rate(recent, 'playable') : rate(clubReadings, 'playable')) * 0.3
+    const severe = rate(clubReadings, 'severeMiss') * 0.7 + (recent.length >= 5 ? rate(recent, 'severeMiss') : rate(clubReadings, 'severeMiss')) * 0.3
+    return { club, carry: summary.typical!, playable, severe }
+  }).sort((a, b) => b.carry - a.carry)
+  const teePool = stats.filter((item) => ['Dr', '3W', '4W-Hybrid'].includes(item.club))
+  const tee = (teePool.length ? teePool : stats).slice().sort((a, b) => (b.playable - b.severe * 1.5) - (a.playable - a.severe * 1.5))[0]
+  const sequence: typeof stats = []
+  let remaining = targetDistance
+  if (par === 3) sequence.push(stats.slice().sort((a, b) => Math.abs(a.carry - targetDistance) - Math.abs(b.carry - targetDistance))[0])
+  else {
+    sequence.push(tee); remaining -= tee.carry
+    const approach = stats.filter((item) => item.club !== tee.club).sort((a, b) => Math.abs(remaining - a.carry) - Math.abs(remaining - b.carry))[0]
+    if (approach) { sequence.push(approach); remaining -= approach.carry }
+    if (par === 5 && remaining > 25) {
+      const layup = stats.filter((item) => item.club !== tee.club && item.club !== approach?.club).sort((a, b) => Math.abs(remaining - a.carry) - Math.abs(remaining - b.carry))[0]
+      if (layup) sequence.splice(1, 0, layup)
+    }
+  }
+  return { tee, sequence }
 }
 
 export function convertMetres(metres: number, units: 'metres' | 'yards') {
@@ -119,6 +152,7 @@ export function seedData(): AppData {
     club,
     distanceMetres,
     mishit: false,
+    playable: true,
     sessionDate: '2026-09-14',
     createdAt,
   })))
@@ -139,16 +173,14 @@ export function categoryCounts(rounds: Round[]) {
 
 export function recommendation(rounds: Round[]) {
   const recent = rounds.filter((round) => round.status === 'archived').slice(-3)
-  const problems = recent.flatMap((round) => round.holes.flatMap((hole) => (hole.tags || []).filter((tag) => tag.type === 'went-wrong')))
+  const problems = recent.flatMap((round) => round.holes.map((hole) => (hole.tags || []).filter((tag) => tag.type === 'went-wrong'))).filter((tags) => tags.length)
   if (problems.length < 2) {
-    const legacy = recent.flatMap((round) => round.holes).filter((hole) => hole.wentWrong.trim())
-    if (legacy.length) { const counts = legacy.reduce<Record<string, number>>((all, hole) => { all[hole.focusCategory] = (all[hole.focusCategory] || 0) + 1; return all }, {}); const [category, count] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]; if (category) return { text: CATEGORY_GUIDANCE[category as FocusCategory], evidence: `${category} was mentioned as a problem ${count} time${count === 1 ? '' : 's'} in recent feedback.` } }
     return { text: 'Not enough repeated feedback yet.', evidence: 'Complete more rounds using the quick tags to reveal a reliable pattern.' }
   }
-  const groups = problems.reduce<Record<string, { count: number; outcomes: Record<string, number> }>>((all, tag) => { const group = all[tag.category] || { count: 0, outcomes: {} }; group.count += 1; group.outcomes[tag.outcome] = (group.outcomes[tag.outcome] || 0) + 1; all[tag.category] = group; return all }, {})
+  const groups = problems.reduce<Record<string, { count: number; outcomes: Record<string, number> }>>((all, tags) => { const categories = new Set(tags.map((tag) => tag.category)); categories.forEach((category) => { const group = all[category] || { count: 0, outcomes: {} }; group.count += 1; tags.filter((tag) => tag.category === category).forEach((tag) => { group.outcomes[tag.outcome] = (group.outcomes[tag.outcome] || 0) + 1 }); all[category] = group }); return all }, {})
   const [category, group] = Object.entries(groups).sort((a, b) => b[1].count - a[1].count)[0]
   const [outcome, outcomeCount] = Object.entries(group.outcomes).sort((a, b) => b[1] - a[1])[0]
   const label = category[0].toUpperCase() + category.slice(1)
   const focus = category === 'drive' ? 'contact and finding playable fairways' : category === 'iron' ? 'distance control' : category === 'putt' ? 'green reading and speed' : `${category} consistency`
-  return { text: `${label} is the main leak right now.`, evidence: `You recorded ${group.count} ${category} problems across your last ${recent.length} rounds, mostly ${outcome} (${outcomeCount}). Focus your next practice on ${focus}.` }
+  return { text: `${label} is the main leak right now.`, evidence: `You recorded ${outcomeCount} ${outcome.toLowerCase()} problem${outcomeCount === 1 ? '' : 's'} across your last ${recent.length} rounds. Focus your next practice on ${focus}.` }
 }
