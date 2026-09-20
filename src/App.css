@@ -89,3 +89,36 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 30px; line-height: 1.05; letter-spa
   .hole-form input, .hole-form select { min-height: 40px; }
   .save-hole { min-height: 42px; }
 }
+
+.analytics-hero { display: grid; grid-template-columns: 112px 1fr; gap: 16px; align-items: center; padding: 17px; border-radius: 10px; background: var(--deep); color: white; }
+.analytics-hero strong { display: block; margin: 8px 0 3px; font-size: 38px; letter-spacing: -2px; }
+.analytics-hero > div:first-child > span:last-child { color: #a6c0aa; font-size: 11px; }
+.hero-chart { height: 90px; }
+.mini-chart { width: 100%; height: 100%; overflow: visible; }
+.mini-chart polyline { fill: none; stroke: var(--lime); stroke-width: 2.5; vector-effect: non-scaling-stroke; }
+.mini-chart circle { fill: var(--lime); }
+.chart-gridline { fill: none; stroke: rgba(255,255,255,.16); stroke-width: .7; vector-effect: non-scaling-stroke; }
+.chart-empty { color: var(--muted); font-size: 12px; padding: 16px 0; }
+.analytics-metrics .metric { min-height: 78px; padding: 13px 11px; }
+.analytics-metrics .metric strong { font-size: 22px; margin-top: 8px; }
+.handicap-panel .mini-chart { height: 90px; margin-top: 14px; }
+.form-list, .club-analytics, .issue-list { margin-top: 15px; }
+.form-row { display: grid; grid-template-columns: 1fr 42%; gap: 14px; align-items: center; border-top: 1px solid #e8ede5; padding: 12px 0 0; margin-top: 12px; }
+.form-row strong, .club-label strong { display: block; font-size: 13px; }
+.form-row small, .club-label small { display: block; color: var(--muted); font-size: 11px; margin-top: 4px; }
+.form-bar, .dispersion-track { height: 7px; border-radius: 99px; background: #e8eee5; overflow: hidden; }
+.form-bar span, .dispersion-track span { display: block; height: 100%; border-radius: inherit; background: #7f9c43; }
+.club-analytics-row { display: grid; grid-template-columns: 1.1fr 1fr 1fr; gap: 10px; border-top: 1px solid #e8ede5; padding: 12px 0 0; margin-top: 12px; }
+.club-label { grid-row: span 2; }
+.club-stat span { display: flex; justify-content: space-between; color: var(--muted); font: 9px 'DM Mono', monospace; }
+.club-stat b { color: var(--forest); font-weight: 700; }
+.club-stat i { display: block; height: 5px; margin-top: 5px; border-radius: 99px; background: #e8eee5; overflow: hidden; }
+.club-stat em { display: block; height: 100%; border-radius: inherit; background: #7f9c43; }
+.club-stat i.risk em { background: #bd8760; }
+.dispersion-track { grid-column: 2 / 4; height: 4px; }
+.dispersion-track span { background: #b7a16d; }
+.issue-row { display: flex; justify-content: space-between; border-top: 1px solid #e8ede5; padding: 11px 0 0; margin-top: 11px; font-size: 13px; }
+.issue-row b { color: #a87948; }
+.recommendation { margin-top: 17px; padding: 13px; border-radius: 8px; background: #e3ebdb; }
+.recommendation strong { display: block; margin-top: 6px; }
+.recommendation p { margin-top: 7px; font-size: 12px; }
