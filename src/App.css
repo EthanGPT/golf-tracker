@@ -39,6 +39,13 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 30px; line-height: 1.05; letter-spa
 @media (min-width: 700px) { .main-content { padding: 36px 34px; } .quick-grid { grid-template-columns: repeat(3, 1fr); } .quick-grid button { grid-template-columns: 20px 1fr; } .quick-grid button svg:last-child { display: none; } }
 
 .unit-toggle, .sticky-tools { display: none; }
+.distance-row { grid-template-columns: 40px minmax(0, 1fr); grid-template-rows: auto auto auto auto; row-gap: 1px; padding: 9px 11px; }
+.distance-row > strong { grid-row: 1 / 5; align-self: start; padding-top: 3px; }
+.distance-row b { grid-column: 2; }
+.distance-row > span:not(.empty), .distance-row > em { grid-column: 2; }
+.distance-row .dispersion-stats { grid-column: 2; grid-row: 4; display: flex; justify-content: flex-start; gap: 10px; justify-items: initial; margin-top: 1px; }
+.distance-row .dispersion-stats span { padding: 2px 5px; border-radius: 4px; background: #eef3e9; }
+.distance-row .empty { grid-column: 2; grid-row: 1 / 5; padding: 8px 0; }
 .index-input { min-height: 32px; width: 125px; margin-top: 7px; padding: 0 8px; font-size: 11px; }
 .hole-form label:nth-child(2) { display: none; }
 .hole-visual-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(145px, .8fr); gap: 10px; align-items: stretch; }
@@ -119,6 +126,24 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 30px; line-height: 1.05; letter-spa
 .dispersion-track span { background: #b7a16d; }
 .issue-row { display: flex; justify-content: space-between; border-top: 1px solid #e8ede5; padding: 11px 0 0; margin-top: 11px; font-size: 13px; }
 .issue-row b { color: #a87948; }
+.legacy-club-control { display: none; }
+.progress-weekly { display: none; }
+.club-selector { display: flex; gap: 6px; overflow-x: auto; margin-top: 15px; padding-bottom: 2px; }
+.club-selector button { flex: 0 0 auto; border: 1px solid var(--line); background: var(--mist); color: var(--forest); border-radius: 7px; padding: 8px 13px; font-size: 12px; font-weight: 800; }
+.club-selector button.selected { background: var(--forest); color: white; border-color: var(--forest); }
+.club-trend-summary { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; margin-top: 18px; }
+.club-trend-summary span, .club-trend-summary small { display: block; color: var(--muted); font-size: 11px; }
+.club-trend-summary strong { display: block; margin-top: 5px; font-size: 25px; letter-spacing: -1px; }
+.club-trend-summary strong.down { color: #718d32; }
+.club-trend-chart { min-height: 175px; height: auto; margin-top: 12px; padding: 8px 0; border-top: 1px solid #e8ede5; border-bottom: 1px solid #e8ede5; }
+.club-trend-chart .mini-chart { height: 100%; }
+.club-trend-line { display: grid; grid-template-columns: 96px 1fr; gap: 10px; align-items: center; min-height: 55px; border-bottom: 1px solid #e8ede5; }
+.club-trend-line:last-child { border-bottom: 0; }
+.club-trend-line-label { display: flex; flex-direction: column; gap: 3px; }
+.club-trend-line-label span { color: var(--muted); font-size: 10px; }
+.club-trend-line-label b { font-size: 15px; }
+.club-trend-line .mini-chart { height: 50px; }
+.chart-caption { margin-top: 11px !important; font-size: 12px !important; }
 .recommendation { margin-top: 17px; padding: 13px; border-radius: 8px; background: #e3ebdb; }
 .recommendation strong { display: block; margin-top: 6px; }
 .recommendation p { margin-top: 7px; font-size: 12px; }

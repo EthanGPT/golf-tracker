@@ -113,7 +113,10 @@ export function caddiePlan(readings: RangeReading[], par: number, targetDistance
     return { club, carry: summary.typical!, playable, severe }
   }).sort((a, b) => b.carry - a.carry)
   const teePool = stats.filter((item) => ['Dr', '3W', '4W-Hybrid'].includes(item.club))
-  const tee = (teePool.length ? teePool : stats).slice().sort((a, b) => (b.playable - b.severe * 1.5) - (a.playable - a.severe * 1.5))[0]
+  // Maximise progress while heavily discounting clubs that bring a ball out of play.
+  // Severe-miss risk is squared so it outweighs small carry or playable-rate gains.
+  const teeScore = (item: typeof stats[number]) => item.carry * (1 - item.severe) ** 2 * (0.85 + item.playable * 0.15)
+  const tee = (teePool.length ? teePool : stats).slice().sort((a, b) => teeScore(b) - teeScore(a))[0]
   // Driver and 3W are tee clubs. 4W-Hybrid remains available from the fairway.
   const fairwayClubs = stats.filter((item) => !['Dr', '3W'].includes(item.club))
   const sequence: typeof stats = []
