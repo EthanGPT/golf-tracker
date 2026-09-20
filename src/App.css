@@ -95,6 +95,12 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 30px; line-height: 1.05; letter-spa
   .hole-form label { gap: 3px; }
   .hole-form input, .hole-form select { min-height: 40px; }
   .save-hole { min-height: 42px; }
+  .club-form-panel { padding: 14px; }
+  .club-trend-summary { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .club-trend-summary small { grid-column: 1 / -1; margin-top: 2px; }
+  .club-trend-summary strong { font-size: 22px; }
+  .club-trend-line { grid-template-columns: 82px minmax(0, 1fr); gap: 7px; }
+  .club-trend-line-label b { font-size: 13px; }
 }
 
 .analytics-hero { display: grid; grid-template-columns: 112px 1fr; gap: 16px; align-items: center; padding: 17px; border-radius: 10px; background: var(--deep); color: white; }
