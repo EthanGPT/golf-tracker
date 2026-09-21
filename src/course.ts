@@ -1,7 +1,72 @@
+import { mergeImportedGeometry, readCachedCourse } from "./courseIngestion";
+import { HERMANUS_IMPORTED_GEOMETRY } from "./hermanusImportedGeometry";
+
 export type CourseLoop = "east" | "north" | "south";
-export type RoundLength = 9 | 18;
-export type Tee = "white" | "yellow" | "red";
+export type RoundLength = 9 | 18 | 27;
+/** Tee and loop IDs are course data, not a global enum. */
+export type Tee = string;
 export type Coordinate = [number, number];
+export type LatLng = { latitude: number; longitude: number };
+export type TeeDefinition = {
+  id: string;
+  name: string;
+  shortName?: string;
+  colour?: string;
+};
+export type TeeBox = { teeId: string; distanceM: number; position?: LatLng };
+export type GreenGeometry = {
+  front?: LatLng;
+  centre?: LatLng;
+  back?: LatLng;
+  polygon?: LatLng[];
+};
+export type HazardType =
+  "bunker" | "water" | "penalty-area" | "out-of-bounds" | "trees" | "other";
+export type HazardDefinition = {
+  id: string;
+  name?: string;
+  type: HazardType;
+  position?: LatLng;
+  polygon?: LatLng[];
+  notes?: string;
+};
+export type HoleCentreline = LatLng[];
+export type TeeTargetKind = "tee-landing" | "fairway" | "dogleg" | "layup" | "green" | "safe";
+export type VerifiedCourseTarget = {
+  id: string;
+  name: string;
+  position: LatLng;
+  kind?: TeeTargetKind;
+  source?: string;
+  verified?: boolean;
+};
+export type HoleDefinition = {
+  number: number;
+  par: number;
+  teeBoxes: TeeBox[];
+  green?: GreenGeometry;
+  hazards?: HazardDefinition[];
+  targets?: VerifiedCourseTarget[];
+  centreline?: HoleCentreline;
+  diagram?: string;
+};
+export type CourseLoopDefinition = {
+  id: string;
+  name: string;
+  holeNumbers: number[];
+};
+export type CourseDefinition = {
+  id: string;
+  name: string;
+  shortName?: string;
+  locationName?: string;
+  latitude: number;
+  longitude: number;
+  timezone: string;
+  holes: HoleDefinition[];
+  tees: TeeDefinition[];
+  loops?: CourseLoopDefinition[];
+};
 export type CourseTarget = { name: string; coordinate: Coordinate };
 export type HoleGeometry = {
   tee?: Partial<Record<Tee, Coordinate>>;
@@ -12,6 +77,8 @@ export type HoleGeometry = {
     polygon?: Coordinate[];
   };
   targets?: CourseTarget[];
+  centreline?: Coordinate[];
+  hazards?: HazardDefinition[];
 };
 export type CourseLocation = { latitude: number; longitude: number };
 export const HERMANUS_LOCATION: CourseLocation = {
@@ -26,22 +93,35 @@ export const HERMANUS_PARS = [
   5,
 ] as const;
 export const HERMANUS_LOOPS: Record<CourseLoop, number[]> = {
-  east: Array.from({ length: 18 }, (_, i) => i + 1),
+  east: [
+    ...Array.from({ length: 18 }, (_, i) => i + 1),
+    ...Array.from({ length: 9 }, (_, i) => i + 19),
+  ],
   north: [
     ...Array.from({ length: 9 }, (_, i) => i + 19),
-    ...Array.from({ length: 9 }, (_, i) => i + 1),
+    ...Array.from({ length: 18 }, (_, i) => i + 1),
   ],
   south: [
     ...Array.from({ length: 9 }, (_, i) => i + 10),
     ...Array.from({ length: 9 }, (_, i) => i + 19),
+    ...Array.from({ length: 9 }, (_, i) => i + 1),
   ],
 };
-export const loopLabel = (loop: CourseLoop) =>
-  ({
-    east: "East · 1–18",
-    north: "North · 19–27 + 1–9",
-    south: "South · 10–18 + 19–27",
-  })[loop];
+export const loopLabel = (loop: CourseLoop, length: 9 | 18 | 27 = 27) => {
+  const sequence = HERMANUS_LOOPS[loop].slice(0, length);
+  const ranges: string[] = [];
+  let start = sequence[0];
+  let previous = sequence[0];
+  sequence.slice(1).forEach((hole) => {
+    if (hole === previous + 1) previous = hole;
+    else {
+      ranges.push(start === previous ? `${start}` : `${start}–${previous}`);
+      start = previous = hole;
+    }
+  });
+  ranges.push(start === previous ? `${start}` : `${start}–${previous}`);
+  return `${loop[0].toUpperCase()}${loop.slice(1)} · ${ranges.join(" + ")}`;
+};
 export const holePar = (hole: number) => HERMANUS_PARS[hole - 1] || 4;
 // White-tee distances from the official Hermanus Golf Club hole-by-hole course guide.
 export const HERMANUS_WHITE_DISTANCES = [
@@ -59,8 +139,12 @@ export const HERMANUS_TEE_DISTANCES = {
     114, 380, 246, 329, 290, 96, 425, 261, 110, 252, 251, 434,
   ],
 } as const;
+export const HERMANUS_YELLOW_DISTANCES = HERMANUS_TEE_DISTANCES.yellow;
+export const HERMANUS_RED_DISTANCES = HERMANUS_TEE_DISTANCES.red;
 export const holeDistance = (hole: number, tee: Tee = "white") =>
-  HERMANUS_TEE_DISTANCES[tee][hole - 1] || 0;
+  HERMANUS_TEE_DISTANCES[tee as keyof typeof HERMANUS_TEE_DISTANCES]?.[
+    hole - 1
+  ] || 0;
 
 // Deliberately empty until each hole is checked against current imagery. This
 // prevents the app from presenting made-up GPS distances as if they were exact.
@@ -95,3 +179,263 @@ export const HERMANUS_HOLE_DIAGRAMS: Record<number, string> = {
   26: "⛳  🟡\n│\n│  🔵\n│\n🟩",
   27: "⛳\n│  \\\n│   \\  🟡\n│    \\\n🟡   │\n     🟩",
 };
+
+const hermanusTeeDefinitions: TeeDefinition[] = [
+  { id: "yellow", name: "Yellow", shortName: "Yellow", colour: "yellow" },
+  { id: "white", name: "White", shortName: "White", colour: "white" },
+  { id: "red", name: "Red", shortName: "Red", colour: "red" },
+];
+
+const hermanusHoles: HoleDefinition[] = HERMANUS_PARS.map((par, index) => {
+  const number = index + 1;
+  return {
+    number,
+    par,
+    teeBoxes: hermanusTeeDefinitions.map((tee) => ({
+      teeId: tee.id,
+      distanceM:
+        HERMANUS_TEE_DISTANCES[tee.id as keyof typeof HERMANUS_TEE_DISTANCES][
+          index
+        ],
+    })),
+    // Geometry is intentionally absent until verified course data is available.
+    diagram: HERMANUS_HOLE_DIAGRAMS[number],
+  };
+});
+
+export const HERMANUS_COURSE: CourseDefinition = {
+  id: "hermanus-golf-club",
+  name: "Hermanus Golf Club",
+  shortName: "Hermanus",
+  locationName: "Hermanus, South Africa",
+  latitude: HERMANUS_LOCATION.latitude,
+  longitude: HERMANUS_LOCATION.longitude,
+  timezone: "Africa/Johannesburg",
+  tees: hermanusTeeDefinitions,
+  holes: hermanusHoles,
+  loops: [
+    { id: "east", name: "East · 1–18", holeNumbers: HERMANUS_LOOPS.east },
+    {
+      id: "north",
+      name: "North · 19–27 + 1–9",
+      holeNumbers: HERMANUS_LOOPS.north,
+    },
+    {
+      id: "south",
+      name: "South · 10–18 + 19–27",
+      holeNumbers: HERMANUS_LOOPS.south,
+    },
+  ],
+};
+
+export const COURSES: Record<string, CourseDefinition> = {
+  [HERMANUS_COURSE.id]: HERMANUS_COURSE,
+};
+
+export function getRuntimeCourse(courseId: string): CourseDefinition | undefined {
+  const course = COURSES[courseId];
+  if (!course) return undefined;
+  const bundled = courseId === "hermanus-golf-club"
+    ? {
+        ...course,
+        holes: course.holes.map((hole) => ({
+          ...hole,
+          green: hole.green || HERMANUS_IMPORTED_GEOMETRY[hole.number],
+        })),
+      }
+    : course;
+  const cached = readCachedCourse(courseId);
+  return cached ? mergeImportedGeometry(bundled, cached) : bundled;
+}
+
+export function getCourse(courseId: string): CourseDefinition | undefined {
+  return getRuntimeCourse(courseId);
+}
+
+export function getCourseHole(courseId: string, holeNumber: number) {
+  return getRuntimeCourse(courseId)?.holes.find((hole) => hole.number === holeNumber);
+}
+
+export function getRuntimeCourseHole(courseId: string, holeNumber: number) {
+  return getRuntimeCourse(courseId)?.holes.find((hole) => hole.number === holeNumber);
+}
+
+export function getCourseTee(courseId: string, teeId: string) {
+  return getCourse(courseId)?.tees.find((tee) => tee.id === teeId);
+}
+
+export function getHoleDistance(
+  courseId: string,
+  holeNumber: number,
+  teeId: string,
+) {
+  return (
+    getCourseHole(courseId, holeNumber)?.teeBoxes.find(
+      (tee) => tee.teeId === teeId,
+    )?.distanceM || 0
+  );
+}
+
+export function getCourseLoops(courseId: string) {
+  return getCourse(courseId)?.loops || [];
+}
+
+export function getCourseTees(courseId: string) {
+  return getCourse(courseId)?.tees || [];
+}
+
+export function getHoleTarget(courseId: string, holeNumber: number) {
+  const hole = getRuntimeCourseHole(courseId, holeNumber);
+  if (hole?.green?.centre)
+    return { position: hole.green.centre, targetType: "green-centre" as const };
+  const target = hole?.targets?.[0];
+  if (target)
+    return { position: target.position, targetType: "target" as const };
+  return undefined;
+}
+
+export type TeeTargetSelection = {
+  targetCoordinate: LatLng;
+  targetName: string;
+  targetDistanceMetres: number;
+  source: string;
+  reason: string;
+};
+
+export type TeeLandingCandidate = {
+  id: string;
+  position: LatLng;
+  distanceFromTeeM: number;
+  remainingToGreenM?: number;
+  bearingDeg: number;
+  hazardClearanceM: number;
+  routeFraction: number;
+};
+
+const bearingDegrees = (from: LatLng, to: LatLng) => {
+  const radians = (value: number) => (value * Math.PI) / 180;
+  const degrees = (value: number) => (value * 180) / Math.PI;
+  const lat1 = radians(from.latitude);
+  const lat2 = radians(to.latitude);
+  const dLon = radians(to.longitude - from.longitude);
+  return (degrees(Math.atan2(Math.sin(dLon) * Math.cos(lat2), Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon))) + 360) % 360;
+};
+
+/**
+ * Generates route-following landing points. It deliberately requires a
+ * verified tee and centreline; a straight tee-to-green guess is not course
+ * geometry and must never be silently presented as one.
+ */
+export function generateTeeLandingCandidates(input: {
+  teeOrigin?: LatLng;
+  centreline?: LatLng[];
+  hazards?: HazardDefinition[];
+  greenCentre?: LatLng;
+  intervalM?: number;
+  maxDistanceM?: number;
+}): TeeLandingCandidate[] {
+  const { teeOrigin, centreline, hazards = [], greenCentre } = input;
+  if (!teeOrigin || !centreline || centreline.length < 2) return [];
+  const route = [teeOrigin, ...centreline];
+  const candidates: TeeLandingCandidate[] = [];
+  let travelled = 0;
+  const interval = input.intervalM || 12;
+  for (let index = 1; index < route.length; index += 1) {
+    const start = route[index - 1];
+    const end = route[index];
+    const segment = distanceMetres(start, end);
+    const steps = Math.max(1, Math.floor(segment / interval));
+    for (let step = 1; step <= steps; step += 1) {
+      const fraction = step / steps;
+      const position = {
+        latitude: start.latitude + (end.latitude - start.latitude) * fraction,
+        longitude: start.longitude + (end.longitude - start.longitude) * fraction,
+      };
+      const distanceFromTeeM = travelled + segment * fraction;
+      if (input.maxDistanceM !== undefined && distanceFromTeeM > input.maxDistanceM) continue;
+      const hazardClearanceM = hazards.length
+        ? Math.min(...hazards.map((hazard) => hazard.position ? distanceMetres(position, hazard.position) : Infinity))
+        : Infinity;
+      candidates.push({
+        id: `route-${candidates.length + 1}`,
+        position,
+        distanceFromTeeM: Math.round(distanceFromTeeM),
+        remainingToGreenM: greenCentre ? Math.round(distanceMetres(position, greenCentre)) : undefined,
+        bearingDeg: Math.round(bearingDegrees(start, end)),
+        hazardClearanceM: Math.round(hazardClearanceM),
+        routeFraction: distanceFromTeeM / Math.max(distanceMetres(teeOrigin, route[route.length - 1]), 1),
+      });
+    }
+    travelled += segment;
+  }
+  return candidates;
+}
+
+const distanceMetres = (a: LatLng, b: LatLng) => {
+  const radius = 6_371_000;
+  const radians = (value: number) => (value * Math.PI) / 180;
+  const dLat = radians(b.latitude - a.latitude);
+  const dLon = radians(b.longitude - a.longitude);
+  const latA = radians(a.latitude);
+  const latB = radians(b.latitude);
+  const value = Math.sin(dLat / 2) ** 2 + Math.cos(latA) * Math.cos(latB) * Math.sin(dLon / 2) ** 2;
+  return radius * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
+};
+
+/** Selects a verified landing/aim target only; it never chooses a club. */
+export function selectTeeTarget(input: {
+  hole: HoleDefinition;
+  teeCoordinate?: LatLng;
+}): TeeTargetSelection | undefined {
+  if (!input.teeCoordinate) return undefined;
+  const explicit = input.hole.targets?.find((target) => target.verified && target.kind !== "green");
+  if (explicit)
+    return {
+      targetCoordinate: explicit.position,
+      targetName: explicit.name,
+      targetDistanceMetres: Math.round(distanceMetres(input.teeCoordinate, explicit.position)),
+      source: explicit.source || "verified-course-target",
+      reason: "Verified tee landing target",
+    };
+  if (input.hole.par === 3 && input.hole.green?.centre)
+    return {
+      targetCoordinate: input.hole.green.centre,
+      targetName: "Green centre",
+      targetDistanceMetres: Math.round(distanceMetres(input.teeCoordinate, input.hole.green.centre)),
+      source: "verified-green-centre",
+      reason: "Par 3 green-centre target",
+    };
+  return undefined;
+}
+
+export type CourseGeometryValidation = {
+  mappedGreenCentres: number;
+  valid: boolean;
+  duplicateGreenCentres: number;
+};
+
+/** Broad sanity check only; it does not claim that a coordinate is verified. */
+export function validateCourseGeometry(
+  course: CourseDefinition,
+): CourseGeometryValidation {
+  const centres = course.holes
+    .map((hole) => hole.green?.centre)
+    .filter(Boolean) as LatLng[];
+  const duplicateGreenCentres =
+    centres.length -
+    new Set(
+      centres.map(
+        (point) => `${point.latitude.toFixed(7)},${point.longitude.toFixed(7)}`,
+      ),
+    ).size;
+  const valid = centres.every(
+    (point) =>
+      Number.isFinite(point.latitude) &&
+      Number.isFinite(point.longitude) &&
+      point.latitude >= course.latitude - 0.1 &&
+      point.latitude <= course.latitude + 0.1 &&
+      point.longitude >= course.longitude - 0.1 &&
+      point.longitude <= course.longitude + 0.1,
+  );
+  return { mappedGreenCentres: centres.length, valid, duplicateGreenCentres };
+}

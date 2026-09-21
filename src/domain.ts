@@ -30,12 +30,40 @@ export type RoundTag = {
   type: "went-right" | "went-wrong";
 };
 export type ShotPhase = "tee" | "approach" | "short-game" | "putting";
+export type AdaptiveCaddieStatus =
+  | "recommended"
+  | "insufficient-data"
+  | "recovery-required"
+  | "no-suitable-club";
+export type AdaptiveClubCandidate = {
+  club: ClubName;
+  carryM?: number;
+  distanceGapM?: number;
+  distanceFitScore?: number;
+  playableRate?: number;
+  severeMissRate?: number;
+  lieSuitability?: number;
+  reliabilityScore?: number;
+  utility?: number;
+  excluded?: boolean;
+  exclusionReason?: string;
+};
+export type AdaptiveCaddieDecision = {
+  recommendedClub?: ClubName;
+  targetDistanceM: number;
+  effectiveDistanceM: number;
+  lie?: ShotLie;
+  candidates: AdaptiveClubCandidate[];
+  reasons: CaddieReason[];
+  status: AdaptiveCaddieStatus;
+};
 export type HoleShot = {
   id: string;
   phase: ShotPhase;
   club?: ClubName;
   outcome?: "good" | "bad";
   note?: string;
+  outcomes?: { outcome: "good" | "bad"; note: string }[];
 };
 export type CaddieContext = {
   windSpeed?: number;
@@ -64,6 +92,18 @@ export type RangeReading = {
   createdAt: string;
 };
 
+export type TeeOrigin = {
+  latitude: number;
+  longitude: number;
+  accuracyM?: number;
+  capturedAt: string;
+  source: "live-gps";
+};
+export type TeeOriginObservation = TeeOrigin & {
+  courseId: string;
+  holeNumber: number;
+  tee: string;
+};
 export type RoundHole = {
   holeNumber: number;
   score: number;
@@ -82,21 +122,44 @@ export type RoundHole = {
     }[];
     lastAccuracy?: number;
   };
+  latestShotContext?: ShotContext;
+  teeOrigin?: TeeOrigin;
+  teeOriginObservations?: TeeOriginObservation[];
+};
+export type ShotLie = "tee" | "fairway" | "rough" | "bunker" | "recovery";
+
+export type ShotContext = {
+  holeNumber: number;
+  position: {
+    latitude: number;
+    longitude: number;
+    accuracyM?: number;
+    capturedAt: string;
+  };
+  targetPosition: { latitude: number; longitude: number };
+  targetType: "green-centre" | "target";
+  distanceToTargetM: number;
+  shotBearingDeg: number;
+  capturedAt: string;
+  lie?: ShotLie;
 };
 
 export type Round = {
   id: string;
   date: string;
   courseName: string;
+  courseId?: string;
   totalScore?: number;
   handicapIndex?: number;
   overallNote: string;
   status: "in-progress" | "archived";
   holes: RoundHole[];
   loop?: "east" | "north" | "south";
+  loopId?: string;
   roundLength?: number;
   holeSequence?: number[];
-  tee?: "white" | "yellow" | "red";
+  tee?: string;
+  teeId?: string;
   archivedAt?: string;
 };
 
@@ -104,6 +167,9 @@ export type WeeklyPlan = {
   weekStart: string;
   practiceAComplete: boolean;
   practiceBComplete: boolean;
+  practiceCComplete?: boolean;
+  practiceSessionsComplete?: boolean[];
+  roundsComplete?: boolean[];
   roundComplete: boolean;
 };
 
@@ -125,6 +191,11 @@ export type AppData = {
     practiceSessionsPerWeek: number;
   };
   playerGoals?: string[];
+  homeCourseId?: string;
+  homeCourseName?: string;
+  preferredTee?: string;
+  lastRoundLength?: 9 | 18 | 27;
+  lastRoundLoop?: "east" | "north" | "south";
 };
 
 export type PracticePriority = {
@@ -146,6 +217,13 @@ export function issueLabel(
     return "Driver strike";
   if ((category === "drive" || category === "tee") && value.includes("slice"))
     return "Slice control";
+  if (
+    (category === "drive" || category === "tee") &&
+    (value.includes("bad drive") || value.includes("fairway"))
+  )
+    return "Fairway finding";
+  if ((category === "drive" || category === "tee") && value.includes("top"))
+    return "Strike height control";
   if (category === "drive" || category === "tee") return "Tee-shot control";
   if (
     (category === "iron" || category === "approach") &&
@@ -238,6 +316,10 @@ export function clubSummary(readings: RangeReading[], club: ClubName) {
   };
 }
 
+export function clubDisplayLabel(club: string) {
+  return club === "4W-Hybrid" ? "4H" : club;
+}
+
 export function caddiePlan(
   readings: RangeReading[],
   par: number,
@@ -283,14 +365,13 @@ export function caddiePlan(
       return { club, carry: summary.typical!, playable, severe };
     })
     .sort((a, b) => b.carry - a.carry);
-  const teePool = stats.filter((item) =>
-    ["Dr", "3W", "4W-Hybrid"].includes(item.club),
-  );
   // Maximise progress while heavily discounting clubs that bring a ball out of play.
   // Severe-miss risk is squared so it outweighs small carry or playable-rate gains.
   const teeScore = (item: (typeof stats)[number]) =>
     item.carry * (1 - item.severe) ** 2 * (0.85 + item.playable * 0.15);
-  const tee = (teePool.length ? teePool : stats)
+  // Tee selection evaluates the whole bag. An iron can be the correct tee
+  // club when its carry is sufficient and its penalty risk is materially lower.
+  const tee = stats
     .slice()
     .sort((a, b) => teeScore(b) - teeScore(a))[0];
   // Driver and 3W are tee clubs. 4W-Hybrid remains available from the fairway.
@@ -329,6 +410,213 @@ export function caddiePlan(
     if (approach) sequence.push(approach);
   }
   return { tee, sequence };
+}
+
+export type CaddieReason = {
+  key: string;
+  label: string;
+  value?: string;
+  tone?: "positive" | "neutral" | "warning";
+};
+
+export type CaddieDecision = {
+  plan: string[];
+  primaryClub?: string;
+  followUpClub?: string;
+  reasons: CaddieReason[];
+};
+
+export const TEE_RATIONALE_CONFIG = {
+  similarDistanceM: 10,
+  meaningfulPlayablePoints: 8,
+  meaningfulSeverePoints: 8,
+} as const;
+
+const naturalClubName = (club: ClubName) => (club === "Dr" ? "Driver" : club);
+
+export function teeRationale(
+  readings: RangeReading[],
+  selectedClub: ClubName,
+): string {
+  const selected = clubSummary(readings, selectedClub);
+  if (!selected.typical) return "Best risk/reliability fit off this tee.";
+  const alternatives = [...new Set([...CLUBS, ...readings.map((reading) => reading.club)])]
+    .filter((club) => club !== selectedClub)
+    .map((club) => ({ club, summary: clubSummary(readings, club) }))
+    .filter((item) => item.summary.typical !== undefined)
+    .sort((a, b) => Math.abs(a.summary.typical! - selected.typical!) - Math.abs(b.summary.typical! - selected.typical!));
+  const comparison = alternatives.find((item) => {
+    const distanceSimilar = Math.abs(item.summary.typical! - selected.typical!) <= TEE_RATIONALE_CONFIG.similarDistanceM;
+    const playableAdvantage = (selected.playablePercentage ?? 0) - (item.summary.playablePercentage ?? 0);
+    const severeAdvantage = (item.summary.severeMissPercentage ?? 0) - (selected.severeMissPercentage ?? 0);
+    return distanceSimilar && (playableAdvantage >= TEE_RATIONALE_CONFIG.meaningfulPlayablePoints || severeAdvantage >= TEE_RATIONALE_CONFIG.meaningfulSeverePoints);
+  });
+  if (!comparison) return "Best risk/reliability fit off this tee.";
+  const playableAdvantage = (selected.playablePercentage ?? 0) - (comparison.summary.playablePercentage ?? 0);
+  const severeAdvantage = (comparison.summary.severeMissPercentage ?? 0) - (selected.severeMissPercentage ?? 0);
+  const other = naturalClubName(comparison.club);
+  if (playableAdvantage >= TEE_RATIONALE_CONFIG.meaningfulPlayablePoints && severeAdvantage >= TEE_RATIONALE_CONFIG.meaningfulSeverePoints)
+    return `Similar distance with better reliability and lower penalty risk than ${other}.`;
+  if (severeAdvantage >= TEE_RATIONALE_CONFIG.meaningfulSeverePoints)
+    return `Similar distance with much lower penalty risk than ${other}.`;
+  if (playableAdvantage >= TEE_RATIONALE_CONFIG.meaningfulPlayablePoints)
+    return `More reliable than ${other} at similar distance.`;
+  return `Best distance and reliability fit off this tee.`;
+}
+
+/** Explains the existing caddiePlan output without changing its selection logic. */
+export function caddieDecision(
+  readings: RangeReading[],
+  par: number,
+  targetDistance: number,
+): CaddieDecision | undefined {
+  const result = caddiePlan(readings, par, targetDistance);
+  if (!result) return undefined;
+  const primary = result.sequence[0];
+  const followUp = result.sequence[1];
+  const primarySummary = primary
+    ? clubSummary(readings, primary.club)
+    : undefined;
+  const followUpSummary = followUp
+    ? clubSummary(readings, followUp.club)
+    : undefined;
+  const reasons: CaddieReason[] = [];
+  if (primary && primarySummary?.typical) {
+    const summary = primarySummary;
+    reasons.push({
+      key: "primary-carry",
+      label: "Typical carry",
+      value: `${summary.typical}m`,
+      tone: "neutral",
+    });
+    if (summary.playablePercentage !== undefined)
+      reasons.push({
+        key: "primary-playable",
+        label: "Playable",
+        value: `${summary.playablePercentage}%`,
+        tone: "positive",
+      });
+    if (summary.severeMissPercentage !== undefined)
+      reasons.push({
+        key: "primary-severe",
+        label: "Severe miss",
+        value: `${summary.severeMissPercentage}%`,
+        tone: summary.severeMissPercentage > 15 ? "warning" : "neutral",
+      });
+    reasons.push({
+      key: "risk-comparison",
+      label: "Reason",
+      value: teeRationale(readings, primary.club),
+      tone: "positive",
+    });
+  }
+  if (
+    primary &&
+    followUp &&
+    primarySummary?.typical &&
+    followUpSummary?.typical
+  ) {
+    const remaining = Math.max(
+      0,
+      Math.round(targetDistance - primarySummary.typical),
+    );
+    reasons.push({
+      key: "follow-up-distance",
+      label: "Expected remaining",
+      value: `~${remaining}m`,
+      tone: "neutral",
+    });
+    reasons.push({
+      key: "follow-up-carry",
+      label: `${followUp.club} typical carry`,
+      value: `${followUpSummary.typical}m`,
+      tone: "positive",
+    });
+    if (followUpSummary.playablePercentage !== undefined)
+      reasons.push({
+        key: "follow-up-playable",
+        label: `${followUp.club} playable`,
+        value: `${followUpSummary.playablePercentage}%`,
+        tone: "positive",
+      });
+  }
+  return {
+    plan: result.sequence.map((item) => item.club),
+    primaryClub: primary?.club,
+    followUpClub: followUp?.club,
+    reasons,
+  };
+}
+
+export const ADAPTIVE_CADDIE_V1 = {
+  distanceFitWeight: 0.5,
+  playableWeight: 0.25,
+  severeMissPenalty: 0.8,
+  reliabilityWeight: 0.1,
+  shortBias: 0.04,
+  lieSuitability: {
+    tee: { Dr: 1, "3W": 0.98, "4W-Hybrid": 0.98, iron: 0.95 },
+    fairway: { Dr: 0, "3W": 0, "4W-Hybrid": 1, iron: 1 },
+    rough: { Dr: 0, "3W": 0.45, "4W-Hybrid": 0.78, iron: 0.95 },
+    bunker: { Dr: 0, "3W": 0, "4W-Hybrid": 0, longIron: 0.45, iron: 0.9 },
+  },
+} as const;
+
+const adaptiveClubKind = (club: ClubName) =>
+  club === "Dr" ? "Dr" : club === "3W" ? "3W" : club === "4W-Hybrid" ? "4W-Hybrid" : ["6i", "7i"].includes(club) ? "longIron" : "iron";
+
+function lieSuitability(club: ClubName, lie: ShotLie) {
+  const values = ADAPTIVE_CADDIE_V1.lieSuitability[lie as keyof typeof ADAPTIVE_CADDIE_V1.lieSuitability];
+  if (lie === "recovery") return ["6i", "7i", "8i", "9i"].includes(club) ? 1 : 0;
+  return values[adaptiveClubKind(club) as keyof typeof values] ?? values.iron ?? 0;
+}
+
+export function adaptiveCaddieDecision(
+  readings: RangeReading[],
+  bag: ClubName[] | undefined,
+  targetDistanceM: number,
+  effectiveDistanceM: number,
+  lie: ShotLie | undefined,
+): AdaptiveCaddieDecision {
+  if (!lie)
+    return { targetDistanceM, effectiveDistanceM, candidates: [], reasons: [], status: "insufficient-data" };
+  if (lie === "recovery") {
+    const recoveryClub = (bag || CLUBS).find((club) => ["6i", "7i", "8i", "9i"].includes(club) && clubSummary(readings, club).typical);
+    return {
+      recommendedClub: recoveryClub,
+      targetDistanceM,
+      effectiveDistanceM,
+      lie,
+      candidates: recoveryClub ? [{ club: recoveryClub, carryM: clubSummary(readings, recoveryClub).typical, lieSuitability: 1, utility: 1 }] : [],
+      reasons: recoveryClub ? [{ key: "recovery", label: "Reason", value: "Conservative club to play back to safety", tone: "positive" }] : [],
+      status: recoveryClub ? "recovery-required" : "no-suitable-club",
+    };
+  }
+  const candidates = [...new Set(bag || CLUBS)]
+    .map((club): AdaptiveClubCandidate => {
+      const summary = clubSummary(readings, club);
+      const carry = summary.typical;
+      const suitability = lieSuitability(club, lie);
+      const excluded = !carry || suitability === 0;
+      if (excluded) return { club, carryM: carry, lieSuitability: suitability, excluded: true, exclusionReason: !carry ? "No carry data" : "Not suitable from this lie" };
+      const gap = Math.abs(carry - effectiveDistanceM);
+      const fit = Math.max(0, 1 - gap / Math.max(effectiveDistanceM, 1));
+      const playable = summary.playablePercentage === undefined ? 0.5 : summary.playablePercentage / 100;
+      const severe = summary.severeMissPercentage === undefined ? 0.15 : summary.severeMissPercentage / 100;
+      const reliability = Math.min(1, summary.readings.length / 10);
+      const shortPreference = carry > effectiveDistanceM ? ADAPTIVE_CADDIE_V1.shortBias : 0;
+      const utility = fit * ADAPTIVE_CADDIE_V1.distanceFitWeight + playable * ADAPTIVE_CADDIE_V1.playableWeight - severe * ADAPTIVE_CADDIE_V1.severeMissPenalty + reliability * ADAPTIVE_CADDIE_V1.reliabilityWeight + suitability * 0.15 - shortPreference;
+      return { club, carryM: carry, distanceGapM: gap, distanceFitScore: fit, playableRate: playable, severeMissRate: severe, lieSuitability: suitability, reliabilityScore: reliability, utility };
+    });
+  const usable = candidates.filter((candidate) => !candidate.excluded).sort((a, b) => (b.utility || -Infinity) - (a.utility || -Infinity));
+  const best = usable[0];
+  if (!best) return { targetDistanceM, effectiveDistanceM, lie, candidates, reasons: [], status: "no-suitable-club" };
+  const reasons: CaddieReason[] = [];
+  if (best.carryM !== undefined) reasons.push({ key: "adaptive-carry", label: "Carry", value: `${best.carryM}m carry`, tone: "positive" });
+  if (best.playableRate !== undefined) reasons.push({ key: "adaptive-playable", label: "Playable", value: `${Math.round(best.playableRate * 100)}% playable`, tone: "positive" });
+  if (best.severeMissRate !== undefined) reasons.push({ key: "adaptive-severe", label: "Severe miss", value: `${Math.round(best.severeMissRate * 100)}% severe miss`, tone: best.severeMissRate > 0.15 ? "warning" : "neutral" });
+  reasons.push({ key: "adaptive-fit", label: "Reason", value: best.carryM && best.carryM < effectiveDistanceM ? "Best fit for playing distance" : "Best distance/risk balance", tone: "positive" });
+  return { recommendedClub: best.club, targetDistanceM, effectiveDistanceM, lie, candidates, reasons, status: "recommended" };
 }
 
 export function convertMetres(metres: number, units: "metres" | "yards") {
@@ -373,11 +661,17 @@ export function seedData(): AppData {
       weekStart: startOfWeek(),
       practiceAComplete: false,
       practiceBComplete: false,
+      practiceCComplete: false,
       roundComplete: false,
     },
     weeklyHistory: [],
     bag: [...CLUBS, "Putter"],
     practiceFrequency: { roundsPerWeek: 1, practiceSessionsPerWeek: 2 },
+    homeCourseId: "hermanus-golf-club",
+    homeCourseName: "Hermanus Golf Club",
+    preferredTee: "white",
+    lastRoundLength: 9,
+    lastRoundLoop: "east",
   };
 }
 

@@ -6,6 +6,9 @@ import {
   categoryCounts,
   clubSummary,
   caddiePlan,
+  caddieDecision,
+  adaptiveCaddieDecision,
+  teeRationale,
   convertMetres,
   median,
   recommendation,
@@ -31,6 +34,18 @@ describe("distance calculations", () => {
     ];
     expect(clubSummary(readings, "6i").typical).toBe(150);
     expect(clubSummary(readings, "6i").max).toBe(160);
+  });
+
+  it("explains the existing caddie plan from stored club metrics", () => {
+    const decision = caddieDecision(data.readings, 4, 400);
+    const plan = caddiePlan(data.readings, 4, 400);
+    expect(decision?.plan).toEqual(plan?.sequence.map((item) => item.club));
+    expect(
+      decision?.reasons.some((reason) => reason.key === "primary-carry"),
+    ).toBe(true);
+    expect(
+      decision?.reasons.some((reason) => reason.key === "primary-playable"),
+    ).toBe(true);
   });
   it.each([
     ["6i", 150],
@@ -96,6 +111,58 @@ describe("distance calculations", () => {
     expect(plan?.sequence.slice(1).map((shot) => shot.club)).not.toContain(
       "3W",
     );
+  });
+});
+
+describe("adaptive live caddie", () => {
+  const readings = [
+    ...Array.from({ length: 10 }, (_, index) => ({
+      id: `6i-${index}`, club: "6i", distanceMetres: 150, mishit: false,
+      playable: true, severeMiss: false, sessionDate: "2026-09-14", createdAt: `2026-09-1${index}`,
+    })),
+    ...Array.from({ length: 10 }, (_, index) => ({
+      id: `dr-${index}`, club: "Dr", distanceMetres: 190, mishit: false,
+      playable: index < 7, severeMiss: index >= 7, sessionDate: "2026-09-14", createdAt: `2026-08-1${index}`,
+    })),
+  ];
+
+  it("can select an iron from the tee when its risk profile is better", () => {
+    const result = adaptiveCaddieDecision(readings, ["Dr", "6i"], 150, 150, "tee");
+    expect(result.status).toBe("recommended");
+    expect(result.recommendedClub).toBe("6i");
+  });
+
+  it("allows the pre-hole plan to select an iron off the tee", () => {
+    const plan = caddiePlan(readings, 4, 300);
+    expect(plan?.tee.club).toBe("6i");
+  });
+
+  it("uses labelled, thresholded tee rationale without overstating tiny differences", () => {
+    const comparable = [
+      ...readings,
+      ...Array.from({ length: 10 }, (_, index) => ({
+        id: `hybrid-${index}`, club: "4W-Hybrid", distanceMetres: 145, mishit: false,
+        playable: index === 0, severeMiss: index !== 0, sessionDate: "2026-09-14", createdAt: `2026-07-1${index}`,
+      })),
+    ];
+    expect(teeRationale(comparable, "6i")).toContain("Similar distance");
+    expect(teeRationale(comparable, "6i")).toContain("lower penalty risk");
+    const tinyDifference = comparable.map((reading) =>
+      reading.club === "4W-Hybrid" ? { ...reading, playable: true, severeMiss: false, distanceMetres: 151 } : reading,
+    );
+    expect(teeRationale(tinyDifference, "6i")).toBe("Best risk/reliability fit off this tee.");
+  });
+
+  it("requires a lie and excludes driver from fairway", () => {
+    expect(adaptiveCaddieDecision(readings, ["Dr", "6i"], 150, 150, undefined).status).toBe("insufficient-data");
+    const result = adaptiveCaddieDecision(readings, ["Dr", "6i"], 150, 150, "fairway");
+    expect(result.candidates.find((candidate) => candidate.club === "Dr")?.excluded).toBe(true);
+  });
+
+  it("returns recovery behavior instead of normal green-distance selection", () => {
+    const result = adaptiveCaddieDecision(readings, ["6i"], 160, 160, "recovery");
+    expect(result.status).toBe("recovery-required");
+    expect(result.reasons[0].value).toContain("safety");
   });
 });
 

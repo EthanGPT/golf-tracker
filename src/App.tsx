@@ -18,7 +18,10 @@ import {
   CLUBS,
   DISTANCE_CLUBS,
   caddiePlan,
+  caddieDecision,
+  adaptiveCaddieDecision,
   clubSummary,
+  clubDisplayLabel,
   convertMetres,
   formatDate,
   personalisedRecommendation,
@@ -37,14 +40,41 @@ import type {
 } from "./domain";
 import { loadCloudData, saveCloudData } from "./cloudStorage";
 import { isCloudConfigured, supabase } from "./supabase";
+import {
+  calculateShotWind,
+  calculateWindAdjustedDistance,
+  formatShotWind,
+  getCourseWeather,
+} from "./weather";
+import type { WeatherContext } from "./weather";
+import {
+  bearingBetween,
+  distanceBetweenMeters,
+  getCurrentPosition,
+  LocationError,
+  TEE_ORIGIN_ACCURACY,
+} from "./geo";
+import {
+  isSyncPending,
+  loadLocalData,
+  markSyncPending,
+  saveLocalData,
+} from "./localRepository";
 import type { Session } from "@supabase/supabase-js";
 import {
   HERMANUS_HOLE_DIAGRAMS,
   HERMANUS_LOOPS,
+  getCourse,
+  getHoleTarget,
   holeDistance,
   holePar,
   loopLabel,
 } from "./course";
+import {
+  fetchAndCacheCourseGeometry,
+  GOLFTRAXX_HERMANUS_PROVIDER_VERSION,
+  readCachedCourse,
+} from "./courseIngestion";
 
 const navItems: Array<{ id: Screen; label: string; icon: typeof Home }> = [
   { id: "today", label: "Home", icon: Home },
@@ -68,7 +98,7 @@ const emptyHole = (holeNumber: number): RoundHole => ({
   wentWrong: "",
 });
 function App() {
-  const [data, setData] = useState<AppData | null>(null);
+  const [data, setData] = useState<AppData | null>(() => loadLocalData());
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [cloudError, setCloudError] = useState("");
@@ -93,6 +123,10 @@ function App() {
     }
   });
   const [roundNotice, setRoundNotice] = useState("");
+  const [roundSetupOpen, setRoundSetupOpen] = useState(true);
+  const [roundHasStarted, setRoundHasStarted] = useState(false);
+  const [roundWeather, setRoundWeather] = useState<WeatherContext>();
+  const [, setGeometryVersion] = useState(0);
   useEffect(() => {
     localStorage.setItem("golf-tracker-screen", screen);
   }, [screen]);
@@ -104,6 +138,47 @@ function App() {
       );
     else localStorage.removeItem("golf-tracker-round-draft");
   }, [roundDraft]);
+  useEffect(() => {
+    const courseId = roundDraft?.courseId || "hermanus-golf-club";
+    if (screen !== "round" || !roundDraft) return;
+    const course = getCourse(courseId);
+    if (!course) return;
+    let cancelled = false;
+    getCourseWeather(course.id, course).then((weather) => {
+      if (!cancelled) setRoundWeather(weather);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [screen, roundDraft?.courseId]);
+  useEffect(() => {
+    const courseId = roundDraft?.courseId || "hermanus-golf-club";
+    const cached = readCachedCourse(courseId);
+    const cacheComplete = cached?.providerVersion === GOLFTRAXX_HERMANUS_PROVIDER_VERSION && cached?.geometryCoverage?.greenCentres === cached?.geometryCoverage?.expectedHoles;
+    if (screen !== "round" || !roundDraft || cacheComplete) return;
+    const course = getCourse(courseId);
+    if (!course) return;
+    let cancelled = false;
+    fetchAndCacheCourseGeometry({
+      externalId: course.id,
+      name: course.name,
+      latitude: course.latitude,
+      longitude: course.longitude,
+      tees: course.tees.map((tee) => ({ id: tee.id, name: tee.name, colour: tee.colour })),
+      holes: course.holes.map((hole) => ({
+        number: hole.number,
+        par: hole.par,
+        distancesM: Object.fromEntries(hole.teeBoxes.map((tee) => [tee.teeId, tee.distanceM])),
+      })),
+    })
+      .then(() => {
+        if (!cancelled) setGeometryVersion((version) => version + 1);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [screen, roundDraft?.courseId]);
   useEffect(() => {
     if (!supabase) {
       setCloudError("Supabase is not configured in this deployment.");
@@ -135,7 +210,12 @@ function App() {
     (async () => {
       const cloudData = await loadCloudData(session);
       if (!cancelled) {
-        setData(cloudData || seedData());
+        const localData = loadLocalData();
+        setData(
+          isSyncPending() && localData
+            ? localData
+            : cloudData || localData || seedData(),
+        );
         setDataReady(true);
       }
     })().catch((error) => {
@@ -152,12 +232,36 @@ function App() {
   }, [authReady, session]);
   useEffect(() => {
     if (!data || !dataReady || !session) return;
-    saveCloudData(session, data).catch((error) =>
-      setCloudError(
-        error instanceof Error ? error.message : "Could not save to Supabase.",
-      ),
-    );
+    saveCloudData(session, data)
+      .then(() => markSyncPending(false))
+      .catch((error) => {
+        markSyncPending(true);
+        setCloudError(
+          error instanceof Error
+            ? error.message
+            : "Could not save to Supabase.",
+        );
+      });
   }, [data, dataReady, session]);
+  useEffect(() => {
+    if (data) {
+      saveLocalData(data);
+      if (!session) markSyncPending(true);
+    }
+  }, [data, session]);
+  useEffect(() => {
+    if (!authReady || session || data) return;
+    setData(seedData());
+    setDataReady(true);
+  }, [authReady, session, data]);
+  useEffect(() => {
+    const retry = () => {
+      if (navigator.onLine && isSyncPending())
+        setData((current) => (current ? { ...current } : current));
+    };
+    window.addEventListener("online", retry);
+    return () => window.removeEventListener("online", retry);
+  }, []);
   const currentHandicap = data?.handicapHistory.at(-1)?.index;
   const archivedRounds =
     data?.rounds.filter((round) => round.status === "archived") || [];
@@ -168,7 +272,7 @@ function App() {
   );
   if (!authReady)
     return <div className="loading">Connecting your notebook...</div>;
-  if (cloudError && !session)
+  if (cloudError && !session && !data)
     return (
       <div className="loading">
         {cloudError}
@@ -179,7 +283,7 @@ function App() {
         </small>
       </div>
     );
-  if (isCloudConfigured && !session) return <AuthScreen />;
+  if (isCloudConfigured && !session && !data) return <AuthScreen />;
   if (!data) return <div className="loading">Loading your notebook...</div>;
   const updateData = (change: (current: AppData) => AppData) =>
     setData((current) => (current ? change(current) : current));
@@ -207,22 +311,45 @@ function App() {
   };
 
   const startRound = () => {
-    const unfinished = data.rounds.find(
-      (round) => round.status === "in-progress",
-    );
-    const next = unfinished || {
+    const unfinished =
+      roundDraft || data.rounds.find((round) => round.status === "in-progress");
+    const next = unfinished
+      ? unfinished.courseId || unfinished.courseName?.toLowerCase().includes("hermanus")
+        ? { ...unfinished, courseId: unfinished.courseId || "hermanus-golf-club" }
+        : unfinished
+      : {
       id: crypto.randomUUID(),
       date: new Date().toISOString().slice(0, 10),
-      courseName: "Hermanus Golf Club",
+      courseName: data.homeCourseName || "Hermanus Golf Club",
+      courseId: data.homeCourseId || "hermanus-golf-club",
       overallNote: "",
       status: "in-progress" as const,
       holes: [],
-      loop: "east" as const,
-      roundLength: 9 as const,
-      tee: "white" as const,
-    };
+      loop: data.lastRoundLoop || "east",
+      loopId: data.lastRoundLoop || "east",
+      roundLength: data.lastRoundLength || 9,
+      tee: data.preferredTee || "white",
+      teeId: data.preferredTee || "white",
+        };
     setRoundDraft(next);
+    const resuming = Boolean(unfinished && !roundSetupOpen);
+    setRoundSetupOpen(!resuming);
+    setRoundHasStarted(resuming);
     setScreen("round");
+  };
+  const discardRound = () => {
+    const draftId = roundDraft?.id;
+    updateData((current) => ({
+      ...current,
+      rounds: current.rounds.filter(
+        (round) =>
+          round.status !== "in-progress" && (!draftId || round.id !== draftId),
+      ),
+    }));
+    setRoundDraft(null);
+    setRoundSetupOpen(true);
+    setRoundHasStarted(false);
+    setScreen("today");
   };
   const saveHole = (submittedHole?: RoundHole) => {
     if (!roundDraft) return null;
@@ -279,6 +406,7 @@ function App() {
               weekStart: startOfWeek(),
               practiceAComplete: false,
               practiceBComplete: false,
+              practiceCComplete: false,
               roundComplete: true,
             },
       weeklyHistory:
@@ -291,7 +419,11 @@ function App() {
     setScreen("progress");
   };
   const updatePlan = (
-    key: "practiceAComplete" | "practiceBComplete" | "roundComplete",
+    key:
+      | "practiceAComplete"
+      | "practiceBComplete"
+      | "practiceCComplete"
+      | "roundComplete",
   ) =>
     updateData((current) => {
       const week = startOfWeek();
@@ -303,12 +435,16 @@ function App() {
               weekStart: week,
               practiceAComplete: false,
               practiceBComplete: false,
+              practiceCComplete: false,
               roundComplete: false,
             };
       const completed = { ...plan, [key]: !plan[key] };
+      const practiceCount =
+        current.practiceFrequency?.practiceSessionsPerWeek ?? 2;
       const finished =
         completed.practiceAComplete &&
         completed.practiceBComplete &&
+        (practiceCount < 3 || completed.practiceCComplete) &&
         completed.roundComplete;
       return finished
         ? {
@@ -318,6 +454,7 @@ function App() {
               weekStart: week,
               practiceAComplete: false,
               practiceBComplete: false,
+              practiceCComplete: false,
               roundComplete: false,
             },
           }
@@ -330,24 +467,33 @@ function App() {
             weeklyPlan: completed,
           };
     });
-  const recordHandicap = (roundId: string, index: number) =>
-    updateData((current) => ({
-      ...current,
-      rounds: current.rounds.map((round) =>
-        round.id === roundId ? { ...round, handicapIndex: index } : round,
-      ),
-      handicapHistory: [
-        ...current.handicapHistory,
-        {
-          id: crypto.randomUUID(),
-          date: new Date().toISOString().slice(0, 10),
-          index,
-          roundId,
+  const togglePracticeSession = (index: number) =>
+    updateData((current) => {
+      const complete = [...(current.weeklyPlan.practiceSessionsComplete || [])];
+      while (complete.length <= index) complete.push(false);
+      complete[index] = !complete[index];
+      return {
+        ...current,
+        weeklyPlan: {
+          ...current.weeklyPlan,
+          practiceSessionsComplete: complete,
         },
-      ],
-    }));
+      };
+    });
+  const toggleRoundSession = (index: number) =>
+    updateData((current) => {
+      const complete = [...(current.weeklyPlan.roundsComplete || [])];
+      while (complete.length <= index) complete.push(false);
+      complete[index] = !complete[index];
+      return {
+        ...current,
+        weeklyPlan: { ...current.weeklyPlan, roundsComplete: complete },
+      };
+    });
   const screenTitle =
-    navItems.find((item) => item.id === screen)?.label || "Today";
+    screen === "settings"
+      ? "Settings"
+      : navItems.find((item) => item.id === screen)?.label || "Today";
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -373,6 +519,8 @@ function App() {
             go={setScreen}
             startRound={startRound}
             updatePlan={updatePlan}
+            togglePracticeSession={togglePracticeSession}
+            toggleRoundSession={toggleRoundSession}
           />
         )}
         {screen === "range" && (
@@ -410,15 +558,17 @@ function App() {
             startRound={startRound}
             saveHole={saveHole}
             archiveRound={archiveRound}
+            exitRound={() => setScreen("today")}
+            discardRound={discardRound}
+            setupOpen={roundSetupOpen}
+            setSetupOpen={setRoundSetupOpen}
+            hasStarted={roundHasStarted}
+            setHasStarted={setRoundHasStarted}
+            weather={roundWeather}
           />
         )}
         {screen === "progress" && (
-          <Progress
-            data={data}
-            recommendation={rec}
-            updatePlan={updatePlan}
-            recordHandicap={recordHandicap}
-          />
+          <Progress data={data} recommendation={rec} updatePlan={updatePlan} />
         )}
         {screen === "settings" && (
           <Settings data={data} updateData={updateData} />
@@ -429,7 +579,10 @@ function App() {
           <button
             key={id}
             className={screen === id ? "active" : ""}
-            onClick={() => setScreen(id)}
+            onClick={() => {
+              if (id === "round" && !roundHasStarted) setRoundSetupOpen(true);
+              setScreen(id);
+            }}
           >
             <Icon size={20} />
             <span>{label}</span>
@@ -522,6 +675,8 @@ function Today({
   go,
   startRound,
   updatePlan,
+  togglePracticeSession,
+  toggleRoundSession,
 }: {
   data: AppData;
   currentHandicap?: number;
@@ -530,19 +685,58 @@ function Today({
   go: (screen: Screen) => void;
   startRound: () => void;
   updatePlan: (
-    key: "practiceAComplete" | "practiceBComplete" | "roundComplete",
+    key:
+      | "practiceAComplete"
+      | "practiceBComplete"
+      | "practiceCComplete"
+      | "roundComplete",
   ) => void;
+  togglePracticeSession: (index: number) => void;
+  toggleRoundSession: (index: number) => void;
 }) {
+  const practiceCount = data.practiceFrequency?.practiceSessionsPerWeek ?? 2;
   const week = [
-    data.weeklyPlan.practiceAComplete,
-    data.weeklyPlan.practiceBComplete,
-    data.weeklyPlan.roundComplete,
+    ...Array.from(
+      { length: practiceCount },
+      (_, index) =>
+        data.weeklyPlan.practiceSessionsComplete?.[index] ??
+        (index === 0
+          ? data.weeklyPlan.practiceAComplete
+          : index === 1
+            ? data.weeklyPlan.practiceBComplete
+            : index === 2
+              ? data.weeklyPlan.practiceCComplete
+              : false),
+    ),
+    ...Array.from(
+      { length: data.practiceFrequency?.roundsPerWeek ?? 1 },
+      (_, index) =>
+        data.weeklyPlan.roundsComplete?.[index] ??
+        (index === 0 ? data.weeklyPlan.roundComplete : false),
+    ),
   ].filter(Boolean).length;
+  const fallbackPractice = [
+    [
+      "Standard range session",
+      "Record carry, playable and severe-miss outcomes.",
+    ],
+    ["Putting session", "Work on pace and first-putt distance control."],
+    ["Short-game session", "Build touch around the green."],
+    ["Approach distance session", "Calibrate your scoring irons."],
+    ["Course-management session", "Play a round and record decisions."],
+  ];
+  const practiceFocus = Array.from({ length: practiceCount }, (_, index) => [
+    `practiceSession:${index}`,
+    rec.priorities[index]?.drill ||
+      fallbackPractice[index % fallbackPractice.length][0],
+    rec.priorities[index]?.evidence ||
+      fallbackPractice[index % fallbackPractice.length][1],
+  ]);
   return (
     <div className="stack fade-in today-screen">
       <section className="intro">
         <span className="eyebrow">PRACTICE FOCUS</span>
-        <h2>{rec.text}</h2>
+        <h2>{rec.priorities[0]?.drill || rec.text}</h2>
         <p>{rec.evidence}</p>
       </section>
       <div className="quick-grid">
@@ -574,7 +768,12 @@ function Today({
         <div className="metric">
           <span>This week</span>
           <strong>
-            {week} <small>of {2 + 1}</small>
+            {week}{" "}
+            <small>
+              of{" "}
+              {(data.practiceFrequency?.practiceSessionsPerWeek ?? 2) +
+                (data.practiceFrequency?.roundsPerWeek ?? 1)}
+            </small>
           </strong>
         </div>
       </section>
@@ -605,36 +804,58 @@ function Today({
         <div className="section-heading">
           <div>
             <span className="eyebrow">THIS WEEK</span>
-            <h3>{week} of 3 completed</h3>
+            <h3>
+              {week} of{" "}
+              {(data.practiceFrequency?.practiceSessionsPerWeek ?? 2) +
+                (data.practiceFrequency?.roundsPerWeek ?? 1)}{" "}
+              completed
+            </h3>
           </div>
           <History size={22} />
         </div>
         {[
-          [
-            "practiceAComplete",
-            rec.priorities[0]?.drill || "Play a round",
-            rec.priorities[0]?.evidence ||
-              "Record specific clubs and outcomes so your caddie can find your priorities",
-          ],
-          [
-            "practiceBComplete",
-            rec.priorities[1]?.drill || "Record distances at the range",
-            rec.priorities[1]?.evidence ||
-              "Build reliable club distances for better on-course decisions",
-          ],
-          ["roundComplete", "Round complete", "Play and reflect"],
+          ...practiceFocus,
+          ...Array.from(
+            { length: data.practiceFrequency?.roundsPerWeek ?? 1 },
+            (_, index) => [
+              `roundSession:${index}`,
+              `Round ${index + 1}`,
+              "Play and reflect",
+            ],
+          ),
         ].map(([key, title, detail]) => (
           <label className="plan-item" key={key}>
             <input
               type="checkbox"
               checked={
-                data.weeklyPlan[key as keyof typeof data.weeklyPlan] as boolean
+                key.startsWith("practiceSession:")
+                  ? Boolean(
+                      data.weeklyPlan.practiceSessionsComplete?.[
+                        Number(key.split(":")[1])
+                      ],
+                    )
+                  : key.startsWith("roundSession:")
+                    ? Boolean(
+                        data.weeklyPlan.roundsComplete?.[
+                          Number(key.split(":")[1])
+                        ],
+                      )
+                    : Boolean(
+                        data.weeklyPlan[key as keyof typeof data.weeklyPlan],
+                      )
               }
               onChange={() =>
-                updatePlan(
-                  key as
-                    "practiceAComplete" | "practiceBComplete" | "roundComplete",
-                )
+                key.startsWith("practiceSession:")
+                  ? togglePracticeSession(Number(key.split(":")[1]))
+                  : key.startsWith("roundSession:")
+                    ? toggleRoundSession(Number(key.split(":")[1]))
+                    : updatePlan(
+                        key as
+                          | "practiceAComplete"
+                          | "practiceBComplete"
+                          | "practiceCComplete"
+                          | "roundComplete",
+                      )
               }
             />
             <span>
@@ -877,7 +1098,7 @@ function Distances({
                 setExpandedClub(expandedClub === club ? null : club)
               }
             >
-              <strong>{club}</strong>
+              <strong>{clubDisplayLabel(club)}</strong>
               {summary.typical ? (
                 <>
                   <b>
@@ -954,30 +1175,6 @@ function MiniLineChart({ values }: { values: number[] }) {
   );
 }
 
-function ClubTrendChart({
-  values,
-  label,
-  suffix = "%",
-}: {
-  values: number[];
-  label: string;
-  suffix?: string;
-}) {
-  return (
-    <div className="club-trend-line">
-      <div className="club-trend-line-label">
-        <span>{label}</span>
-        <b>
-          {values.at(-1) === undefined
-            ? "—"
-            : `${Math.round(values.at(-1)!)}${suffix}`}
-        </b>
-      </div>
-      <MiniLineChart values={values} />
-    </div>
-  );
-}
-
 function ClubFormPanel({ readings }: { readings: AppData["readings"] }) {
   const clubs = DISTANCE_CLUBS.filter((club) =>
     readings.some((reading) => reading.club === club),
@@ -1025,50 +1222,53 @@ function ClubFormPanel({ readings }: { readings: AppData["readings"] }) {
       </div>
       {clubs.length ? (
         <>
-          <div
-            className="club-selector"
-            role="tablist"
-            aria-label="Select club"
-          >
-            {clubs.map((item) => (
-              <button
-                key={item}
-                className={item === club ? "selected" : ""}
-                onClick={() => setSelectedClub(item)}
-              >
-                {item}
-              </button>
-            ))}
+          <label className="insights-club-select">
+            Club
+            <select
+              value={club}
+              onChange={(event) => setSelectedClub(event.target.value)}
+            >
+              {clubs.map((item) => (
+                <option key={item} value={item}>
+                  {item === "4W-Hybrid" ? "4H" : item}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="club-health-heading">
+            <strong>{clubDisplayLabel(club)}</strong>
+            <small>{clubReadings.length} logged shots</small>
           </div>
-          <div className="club-trend-summary">
-            <div>
-              <span>Average carry</span>
-              <strong>{Math.round(average!)} m</strong>
+          <div className="club-health">
+            <div className="club-health-carry">
+              <span>Carry</span>
+              <div className="club-health-value">
+                <strong>{Math.round(average!)}m</strong>
+                <small>
+                  {change === undefined
+                    ? "—"
+                    : `${change > 0 ? "+" : ""}${Math.round(change)}m change`}
+                </small>
+              </div>
+              <MiniLineChart values={carryTrend} />
             </div>
-            <div>
-              <span>Average change</span>
-              <strong
-                className={change !== undefined && change < 0 ? "down" : ""}
-              >
-                {change === undefined
-                  ? "—"
-                  : `${change > 0 ? "+" : ""}${Math.round(change)} m`}
-              </strong>
+            <div className="club-health-row">
+              <span>Playable</span>
+              <b>{Math.round(playableTrend.at(-1) || 0)}%</b>
+              <i>
+                <em style={{ width: `${playableTrend.at(-1) || 0}%` }} />
+              </i>
             </div>
-            <small>{clubReadings.length} shots · cumulative trend</small>
-          </div>
-          <div className="club-trend-chart">
-            <ClubTrendChart
-              values={carryTrend}
-              label="Average carry"
-              suffix=" m"
-            />
-            <ClubTrendChart values={playableTrend} label="Playable" />
-            <ClubTrendChart values={severeMissTrend} label="Severe miss" />
+            <div className="club-health-row risk">
+              <span>Severe miss</span>
+              <b>{Math.round(severeMissTrend.at(-1) || 0)}%</b>
+              <i>
+                <em style={{ width: `${severeMissTrend.at(-1) || 0}%` }} />
+              </i>
+            </div>
           </div>
           <p className="chart-caption">
-            Cumulative trends show whether this club is becoming more
-            predictable over time.
+            Recent form across logged range shots.
           </p>
         </>
       ) : (
@@ -1161,6 +1361,12 @@ function Settings({
   data: AppData;
   updateData: (change: (current: AppData) => AppData) => void;
 }) {
+  const [handicapInput, setHandicapInput] = useState("");
+  const [customClub, setCustomClub] = useState("");
+  const [editingBag, setEditingBag] = useState(false);
+  const [settingsEditor, setSettingsEditor] = useState<
+    "course" | "tee" | "handicap" | null
+  >(null);
   const bag = data.bag || [...CLUBS, "Putter"];
   const available = [...new Set([...CLUBS, "5W", "Putter", "2i", "3i", "4i"])];
   const toggleClub = (club: string) =>
@@ -1177,103 +1383,311 @@ function Settings({
     updateData((current) => ({
       ...current,
       practiceFrequency: {
-        roundsPerWeek: current.practiceFrequency?.roundsPerWeek || 1,
+        roundsPerWeek: current.practiceFrequency?.roundsPerWeek ?? 1,
         practiceSessionsPerWeek:
-          current.practiceFrequency?.practiceSessionsPerWeek || 2,
+          current.practiceFrequency?.practiceSessionsPerWeek ?? 2,
         [key]: value,
       },
     }));
+  const saveHandicap = () => {
+    const index = Number(handicapInput);
+    if (!Number.isFinite(index) || index < 0 || index > 54) return;
+    updateData((current) => ({
+      ...current,
+      handicapHistory: [
+        ...current.handicapHistory,
+        {
+          id: crypto.randomUUID(),
+          date: new Date().toISOString().slice(0, 10),
+          index,
+        },
+      ],
+    }));
+    setHandicapInput("");
+  };
+  const addCustomClub = () => {
+    const club = customClub.trim();
+    if (!club || bag.includes(club)) return;
+    updateData((current) => ({
+      ...current,
+      bag: [...(current.bag || bag), club],
+    }));
+    setCustomClub("");
+  };
   return (
-    <div className="stack fade-in">
-      <section className="screen-lead">
-        <span className="eyebrow">YOUR SETUP</span>
-        <h2>Make the tracker yours.</h2>
-        <p>Set your practice rhythm and build the bag you actually play.</p>
+    <div className="stack fade-in compact-settings">
+      <section className="screen-lead compact-settings-heading">
+        <span className="eyebrow">SETTINGS</span>
+        <h2>Golf</h2>
       </section>
-      <section className="panel settings-panel">
-        <div className="section-heading">
-          <div>
-            <span className="eyebrow">PRACTICE RHYTHM</span>
-            <h3>How often do you want to practise?</h3>
+      <section className="settings-group">
+        <span className="eyebrow">GOLF</span>
+        <div className="panel settings-panel compact-preferences">
+          <button
+            className="settings-preference-row"
+            onClick={() => setSettingsEditor("course")}
+          >
+            <span>Home course</span>
+            <strong>{data.homeCourseName || "Hermanus Golf Club"}</strong>
+            <ChevronRight size={16} />
+          </button>
+          <button
+            className="settings-preference-row"
+            onClick={() => setSettingsEditor("tee")}
+          >
+            <span>Preferred tees</span>
+            <strong>
+              {data.preferredTee === "yellow"
+                ? "Yellow"
+                : data.preferredTee === "red"
+                  ? "Red"
+                  : "White"}
+            </strong>
+            <ChevronRight size={16} />
+          </button>
+          <button
+            className="settings-preference-row"
+            onClick={() => {
+              setHandicapInput(
+                String(data.handicapHistory.at(-1)?.index ?? ""),
+              );
+              setSettingsEditor("handicap");
+            }}
+          >
+            <span>Handicap</span>
+            <strong>{data.handicapHistory.at(-1)?.index ?? "No index"}</strong>
+            <ChevronRight size={16} />
+          </button>
+        </div>
+      </section>
+      <section className="settings-group">
+        <span className="eyebrow">WEEKLY PLAN</span>
+        <div className="panel settings-panel">
+          <label className="settings-field">
+            Rounds per week
+            <span className="stepper">
+              <button
+                onClick={() =>
+                  updateFrequency(
+                    "roundsPerWeek",
+                    Math.max(
+                      0,
+                      (data.practiceFrequency?.roundsPerWeek ?? 1) - 1,
+                    ),
+                  )
+                }
+              >
+                −
+              </button>
+              <b>{data.practiceFrequency?.roundsPerWeek ?? 1}</b>
+              <button
+                onClick={() =>
+                  updateFrequency(
+                    "roundsPerWeek",
+                    Math.min(
+                      7,
+                      (data.practiceFrequency?.roundsPerWeek ?? 1) + 1,
+                    ),
+                  )
+                }
+              >
+                +
+              </button>
+            </span>
+          </label>
+          <label className="settings-field">
+            Practice sessions per week
+            <span className="stepper">
+              <button
+                onClick={() =>
+                  updateFrequency(
+                    "practiceSessionsPerWeek",
+                    Math.max(
+                      0,
+                      (data.practiceFrequency?.practiceSessionsPerWeek ?? 2) -
+                        1,
+                    ),
+                  )
+                }
+              >
+                −
+              </button>
+              <b>{data.practiceFrequency?.practiceSessionsPerWeek ?? 2}</b>
+              <button
+                onClick={() =>
+                  updateFrequency(
+                    "practiceSessionsPerWeek",
+                    Math.min(
+                      14,
+                      (data.practiceFrequency?.practiceSessionsPerWeek ?? 2) +
+                        1,
+                    ),
+                  )
+                }
+              >
+                +
+              </button>
+            </span>
+          </label>
+        </div>
+      </section>
+      <section className="settings-group">
+        <span className="eyebrow">BAG</span>
+        <div className="panel settings-panel">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">GOLF BAG</span>
+              <h3>Clubs you carry</h3>
+            </div>
+            <span className="count-pill">{bag.length} clubs</span>
+          </div>
+          <button
+            className="settings-preference-row bag-edit-row"
+            onClick={() => setEditingBag(!editingBag)}
+          >
+            <span>{editingBag ? "Done" : "Edit bag"}</span>
+            <ChevronRight size={16} />
+          </button>
+          {!editingBag && (
+            <p className="bag-summary">
+              {bag.map(clubDisplayLabel).join(" · ")}
+            </p>
+          )}
+          {editingBag && (
+            <div className="bag-grid">
+              {available.map((club) => (
+                <button
+                  type="button"
+                  key={club}
+                  className={bag.includes(club) ? "selected" : ""}
+                  onClick={() => toggleClub(club)}
+                >
+                  {club}
+                </button>
+              ))}
+            </div>
+          )}
+          {editingBag && (
+            <div className="settings-inline">
+              <input
+                value={customClub}
+                placeholder="Add a club"
+                onChange={(event) => setCustomClub(event.target.value)}
+                onKeyDown={(event) => event.key === "Enter" && addCustomClub()}
+              />
+              <button className="primary-button" onClick={addCustomClub}>
+                Add club
+              </button>
+            </div>
+          )}
+        </div>
+      </section>
+      {settingsEditor && (
+        <div
+          className="settings-sheet-overlay"
+          onClick={() => setSettingsEditor(null)}
+        >
+          <div
+            className="settings-sheet"
+            onClick={(event) => event.stopPropagation()}
+          >
+            {settingsEditor === "course" && (
+              <>
+                <h3>Home course</h3>
+                <button
+                  onClick={() => {
+                    updateData((current) => ({
+                      ...current,
+                      homeCourseId: "hermanus-golf-club",
+                      homeCourseName: "Hermanus Golf Club",
+                    }));
+                    setSettingsEditor(null);
+                  }}
+                >
+                  Hermanus Golf Club
+                </button>
+              </>
+            )}
+            {settingsEditor === "tee" && (
+              <>
+                <h3>Preferred tees</h3>
+                {(["white", "yellow", "red"] as const).map((tee) => (
+                  <button
+                    key={tee}
+                    onClick={() => {
+                      updateData((current) => ({
+                        ...current,
+                        preferredTee: tee,
+                      }));
+                      setSettingsEditor(null);
+                    }}
+                  >
+                    {tee[0].toUpperCase() + tee.slice(1)}
+                  </button>
+                ))}
+              </>
+            )}
+            {settingsEditor === "handicap" && (
+              <>
+                <h3>Handicap index</h3>
+                <input
+                  type="number"
+                  min="0"
+                  max="54"
+                  step="0.1"
+                  value={handicapInput}
+                  onChange={(event) => setHandicapInput(event.target.value)}
+                />
+                <div>
+                  <button onClick={() => setSettingsEditor(null)}>
+                    Cancel
+                  </button>
+                  <button
+                    className="primary-button"
+                    onClick={() => {
+                      saveHandicap();
+                      setSettingsEditor(null);
+                    }}
+                  >
+                    Save
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
-        <label className="settings-field">
-          Rounds per week
-          <input
-            type="number"
-            min="0"
-            max="7"
-            value={data.practiceFrequency?.roundsPerWeek ?? 1}
-            onChange={(event) =>
-              updateFrequency("roundsPerWeek", Number(event.target.value))
-            }
-          />
-        </label>
-        <p className="settings-copy">
-          Sessions are named automatically from your current issues and goals.
-          Use Settings to control how often you practise; the caddie chooses the
-          work.
-        </p>
-        <label className="settings-field">
-          Practice sessions per week
-          <input
-            type="number"
-            min="0"
-            max="14"
-            value={data.practiceFrequency?.practiceSessionsPerWeek ?? 2}
-            onChange={(event) =>
-              updateFrequency(
-                "practiceSessionsPerWeek",
-                Number(event.target.value),
-              )
-            }
-          />
-        </label>
-      </section>
-      <section className="panel settings-panel">
-        <div className="section-heading">
-          <div>
-            <span className="eyebrow">GOLF BAG</span>
-            <h3>Clubs you carry</h3>
-          </div>
-          <span className="count-pill">{bag.length} clubs</span>
-        </div>
-        <p className="settings-copy">
-          Your bag controls the clubs available during round entry and future
-          recommendations.
-        </p>
-        <div className="bag-grid">
-          {available.map((club) => (
-            <button
-              type="button"
-              key={club}
-              className={bag.includes(club) ? "selected" : ""}
-              onClick={() => toggleClub(club)}
-            >
-              {club}
-            </button>
-          ))}
-        </div>
-      </section>
+      )}
     </div>
   );
+}
+
+function roundScoreToPar(round: AppData["rounds"][number]) {
+  return (
+    (round.totalScore || roundTotal(round)) -
+    round.holes.reduce((sum, hole) => sum + holePar(hole.holeNumber), 0)
+  );
+}
+
+function formatScoreToPar(value: number) {
+  return value === 0 ? "E" : `${value > 0 ? "+" : ""}${value}`;
 }
 
 function Progress({
   data,
   recommendation: rec,
   updatePlan,
-  recordHandicap,
 }: {
   data: AppData;
   recommendation: ReturnType<typeof personalisedRecommendation>;
   updatePlan: (
-    key: "practiceAComplete" | "practiceBComplete" | "roundComplete",
+    key:
+      | "practiceAComplete"
+      | "practiceBComplete"
+      | "practiceCComplete"
+      | "roundComplete",
   ) => void;
-  recordHandicap: (roundId: string, index: number) => void;
 }) {
   const [selectedRoundId, setSelectedRoundId] = useState<string | null>(null);
-  const [showIssueBreakdown, setShowIssueBreakdown] = useState(false);
   const [insightsTab, setInsightsTab] = useState<
     "overview" | "clubs" | "rounds"
   >("overview");
@@ -1284,6 +1698,9 @@ function Progress({
   const completed = [
     data.weeklyPlan.practiceAComplete,
     data.weeklyPlan.practiceBComplete,
+    ...((data.practiceFrequency?.practiceSessionsPerWeek ?? 2) >= 3
+      ? [data.weeklyPlan.practiceCComplete]
+      : []),
     data.weeklyPlan.roundComplete,
   ].filter(Boolean).length;
   const scores = recent.map((round) => round.totalScore || roundTotal(round));
@@ -1311,19 +1728,6 @@ function Progress({
     };
   });
   const maxTrouble = Math.max(...categoryStats.map((item) => item.trouble), 1);
-  const issues = holes.flatMap((hole) =>
-    (hole.tags || [])
-      .filter((tag) => tag.type === "went-wrong")
-      .map((tag) => tag.outcome),
-  );
-  const issueCounts = Object.entries(
-    issues.reduce<Record<string, number>>(
-      (all, issue) => ({ ...all, [issue]: (all[issue] || 0) + 1 }),
-      {},
-    ),
-  )
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5);
   const clubStats = DISTANCE_CLUBS.map((club) => {
     const readings = data.readings.filter((reading) => reading.club === club);
     const usable = readings.filter((reading) => !reading.severeMiss);
@@ -1382,11 +1786,6 @@ function Progress({
     );
   return (
     <div className={`stack fade-in insights-screen insights-${insightsTab}`}>
-      <section className="screen-lead">
-        <span className="eyebrow">THE LONG VIEW</span>
-        <h2>What is changing in your game?</h2>
-        <p>Scoring, leaks, and the next thing to practise.</p>
-      </section>
       <div
         className="insights-tabs"
         role="tablist"
@@ -1425,20 +1824,6 @@ function Progress({
           <MiniLineChart values={scores} />
         </div>
       </section>
-      <div className="metric-grid analytics-metrics">
-        <div className="metric">
-          <span>Rounds logged</span>
-          <strong>{archived.length}</strong>
-        </div>
-        <div className="metric">
-          <span>Holes tracked</span>
-          <strong>{holes.length}</strong>
-        </div>
-        <div className="metric">
-          <span>Current index</span>
-          <strong>{data.handicapHistory.at(-1)?.index ?? "—"}</strong>
-        </div>
-      </div>
       <section className="panel handicap-panel">
         <div className="section-heading">
           <div>
@@ -1527,42 +1912,15 @@ function Progress({
           ))}
         </div>
       </section>
-      <section className="panel insights-leaks">
-        <div className="section-heading">
-          <div>
-            <span className="eyebrow">PRACTICE FOCUS</span>
-            <h3>{rec.text}</h3>
-          </div>
-          <Activity size={22} />
-        </div>
-        <button
-          className="issue-disclosure"
-          onClick={() => setShowIssueBreakdown(!showIssueBreakdown)}
-        >
-          View issue breakdown {showIssueBreakdown ? "↑" : "→"}
-        </button>
-        {showIssueBreakdown && issueCounts.length > 0 && (
-          <div className="issue-list">
-            {issueCounts.map(([issue, count]) => (
-              <div className="issue-row" key={issue}>
-                <span>{issue}</span>
-                <b>{count}</b>
-              </div>
-            ))}
-          </div>
-        )}
-        <div className="recommendation">
-          <span className="eyebrow">EVIDENCE</span>
-          <strong>{rec.text}</strong>
-          <p>{rec.evidence}</p>
-        </div>
-      </section>
       <section className="panel weekly progress-weekly insights-weekly">
         <div className="section-heading">
           <div>
             <span className="eyebrow">THIS WEEK</span>
             <h3>
-              {completed} of {2 + 1} completed
+              {completed} of{" "}
+              {(data.practiceFrequency?.practiceSessionsPerWeek ?? 2) +
+                (data.practiceFrequency?.roundsPerWeek ?? 1)}{" "}
+              completed
             </h3>
           </div>
           <History size={22} />
@@ -1580,6 +1938,16 @@ function Progress({
             rec.priorities[1]?.evidence ||
               "Build reliable club distances for better on-course decisions",
           ],
+          ...((data.practiceFrequency?.practiceSessionsPerWeek ?? 2) >= 3
+            ? [
+                [
+                  "practiceCComplete",
+                  rec.priorities[2]?.drill || "Choose another focus",
+                  rec.priorities[2]?.evidence ||
+                    "Use your next practice session to reinforce the next priority",
+                ],
+              ]
+            : []),
           ["roundComplete", "Round complete", "Play and reflect"],
         ].map(([key, title, detail]) => (
           <label className="plan-item" key={key}>
@@ -1591,7 +1959,10 @@ function Progress({
               onChange={() =>
                 updatePlan(
                   key as
-                    "practiceAComplete" | "practiceBComplete" | "roundComplete",
+                    | "practiceAComplete"
+                    | "practiceBComplete"
+                    | "practiceCComplete"
+                    | "roundComplete",
                 )
               }
             />
@@ -1635,24 +2006,21 @@ function Progress({
                 <div>
                   <strong>{formatDate(round.date)}</strong>
                   <span>{round.courseName || "Local round"}</span>
-                  <input
-                    className="index-input"
-                    type="number"
-                    step="0.1"
-                    placeholder={
-                      round.handicapIndex
-                        ? String(round.handicapIndex)
-                        : "Official index"
-                    }
-                    onBlur={(event) => (
-                      event.stopPropagation(),
-                      event.target.value &&
-                        recordHandicap(round.id, Number(event.target.value))
-                    )}
-                    onClick={(event) => event.stopPropagation()}
-                  />
                 </div>
-                <b>{round.totalScore || roundTotal(round)}</b>
+                <div className="round-score-summary">
+                  <b>{round.totalScore || roundTotal(round)}</b>
+                  <small
+                    className={
+                      roundScoreToPar(round) < 0
+                        ? "under"
+                        : roundScoreToPar(round) > 0
+                          ? "over"
+                          : "even"
+                    }
+                  >
+                    {formatScoreToPar(roundScoreToPar(round))}
+                  </small>
+                </div>
               </div>
             ))
         ) : (
@@ -1811,6 +2179,112 @@ function ArchivedScorecard({ round }: { round: AppData["rounds"][number] }) {
   );
 }
 
+function RoundSetup({
+  draft,
+  setDraft,
+  startRound,
+  exitRound,
+  discardRound,
+}: {
+  draft: AppData["rounds"][number];
+  setDraft: (round: AppData["rounds"][number]) => void;
+  startRound: () => void;
+  exitRound: () => void;
+  discardRound: () => void;
+}) {
+  const loop = draft.loop || "east";
+  const length = draft.roundLength || 9;
+  const update = (patch: Partial<typeof draft>) =>
+    setDraft({ ...draft, ...patch, holes: [] });
+  return (
+    <div className="stack fade-in round-screen round-setup-screen">
+      <div className="round-actions">
+        <button type="button" className="text-button" onClick={exitRound}>
+          ← Home
+        </button>
+      </div>
+      <section className="round-setup round-setup-primary">
+        <span className="eyebrow">ROUND SETUP</span>
+        <h2>Set up your round</h2>
+        <p className="muted">
+          Choose the course, tees and number of holes before you start.
+        </p>
+        <label>
+          Course
+          <select
+            value={draft.courseName}
+            onChange={(event) => update({ courseName: event.target.value })}
+          >
+            <option>Hermanus Golf Club</option>
+          </select>
+        </label>
+        <div className="setup-grid">
+          <label>
+            Holes
+            <select
+              value={length}
+              onChange={(event) =>
+                update({
+                  roundLength: Number(event.target.value) as 9 | 18 | 27,
+                })
+              }
+            >
+              {[9, 18, 27].map((count) => (
+                <option key={count} value={count}>
+                  {count} holes
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Tees
+            <select
+              value={draft.tee || "white"}
+              onChange={(event) =>
+                update({
+                  tee: event.target.value as "white" | "yellow" | "red",
+                })
+              }
+            >
+              <option value="white">White tees</option>
+              <option value="yellow">Yellow tees</option>
+              <option value="red">Red tees</option>
+            </select>
+          </label>
+        </div>
+        <label>
+          Starting loop
+          <select
+            value={loop}
+            onChange={(event) =>
+              update({ loop: event.target.value as typeof loop })
+            }
+          >
+            {(["east", "north", "south"] as const).map((item) => (
+              <option key={item} value={item}>
+                {loopLabel(item, length as 9 | 18 | 27)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          className="primary-button start-round-button"
+          onClick={startRound}
+        >
+          {draft.holes.length ? "Resume round →" : "Start round →"}
+        </button>
+        <button
+          type="button"
+          className="text-button exit-round-button"
+          onClick={discardRound}
+        >
+          Exit round
+        </button>
+      </section>
+    </div>
+  );
+}
+
 function RoundMode({
   readings,
   bag,
@@ -1820,6 +2294,13 @@ function RoundMode({
   startRound,
   saveHole,
   archiveRound,
+  exitRound,
+  discardRound,
+  setupOpen,
+  setSetupOpen,
+  hasStarted,
+  setHasStarted,
+  weather,
 }: {
   readings: AppData["readings"];
   bag?: ClubName[];
@@ -1830,19 +2311,41 @@ function RoundMode({
   startRound: () => void;
   saveHole: (hole?: RoundHole) => AppData["rounds"][number] | null;
   archiveRound: (round?: AppData["rounds"][number] | null) => void;
+  exitRound: () => void;
+  discardRound: () => void;
+  setupOpen: boolean;
+  setSetupOpen: (open: boolean) => void;
+  hasStarted: boolean;
+  setHasStarted: (started: boolean) => void;
+  weather?: WeatherContext;
 }) {
   const [activeHole, setActiveHole] = useState(0);
   const [courseOpen, setCourseOpen] = useState(false);
+  const [nextShotStatus, setNextShotStatus] = useState("");
+  const [showAdaptiveWhy, setShowAdaptiveWhy] = useState(false);
   if (!draft)
     return (
       <div className="empty-state fade-in">
         <CircleDot size={34} />
-        <h2>One hole at a time.</h2>
-        <p>Start a Hermanus round and keep the notes short.</p>
+        <h2>Start a round</h2>
+        <p>Choose your course, tees and holes to get started.</p>
         <button className="primary-button" onClick={startRound}>
-          Start round
+          Continue to setup
         </button>
       </div>
+    );
+  if (setupOpen || !hasStarted)
+    return (
+      <RoundSetup
+        draft={draft}
+        startRound={() => {
+          setHasStarted(true);
+          setSetupOpen(false);
+        }}
+        setDraft={setDraft}
+        exitRound={exitRound}
+        discardRound={discardRound}
+      />
     );
   const loop = draft.loop || "east";
   const length = draft.roundLength || 9;
@@ -1853,10 +2356,15 @@ function RoundMode({
     draft.holes.find((hole) => hole.holeNumber === holeNumber) ||
     emptyHole(holeNumber);
   const completed = draft.holes.length;
-  const update = (patch: Partial<typeof draft>) => {
-    setActiveHole(0);
-    setDraft({ ...draft, ...patch });
-  };
+  const teeTarget = holePar(holeNumber) === 3
+    ? getHoleTarget(draft.courseId || "hermanus-golf-club", holeNumber)
+    : undefined;
+  const teeWind = currentHole.teeOrigin && teeTarget && weather
+    ? calculateShotWind(weather, bearingBetween(currentHole.teeOrigin, teeTarget.position))
+    : undefined;
+  const teeAdjustment = teeWind && teeTarget
+    ? calculateWindAdjustedDistance(distanceBetweenMeters(currentHole.teeOrigin!, teeTarget.position), teeWind)
+    : undefined;
   const updateHole = (patch: Partial<typeof currentHole>) =>
     setDraft({
       ...draft,
@@ -1867,58 +2375,53 @@ function RoundMode({
         (a, b) => holes.indexOf(a.holeNumber) - holes.indexOf(b.holeNumber),
       ),
     });
+  const captureNextShot = async () => {
+    const target = getHoleTarget(
+      draft.courseId || "hermanus-golf-club",
+      holeNumber,
+    );
+    if (!target) {
+      setNextShotStatus("Green location not mapped for this hole yet.");
+      return;
+    }
+    setNextShotStatus("Getting location…");
+    try {
+      const position = await getCurrentPosition();
+      const context = {
+        holeNumber,
+        position,
+        targetPosition: target.position,
+        targetType: target.targetType,
+        distanceToTargetM: Math.round(
+          distanceBetweenMeters(position, target.position),
+        ),
+        shotBearingDeg: Math.round(bearingBetween(position, target.position)),
+        capturedAt: position.capturedAt,
+      };
+      updateHole({ latestShotContext: context });
+      setNextShotStatus("");
+    } catch (error) {
+      const kind = error instanceof LocationError ? error.kind : "unavailable";
+      setNextShotStatus(
+        kind === "denied"
+          ? "Location permission needed"
+          : kind === "timeout"
+            ? "Location timed out. Try again."
+            : "Location unavailable",
+      );
+    }
+  };
   return (
     <div className="stack fade-in round-screen">
-      {completed === 0 && (
-        <section className="round-setup">
-          <span className="eyebrow">HERMANUS GOLF CLUB</span>
-          <div className="setup-grid">
-            <label>
-              Loop
-              <select
-                value={loop}
-                onChange={(e) =>
-                  update({ loop: e.target.value as typeof loop, holes: [] })
-                }
-              >
-                {(["east", "north", "south"] as const).map((item) => (
-                  <option key={item} value={item}>
-                    {loopLabel(item)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Round
-              <select
-                value={length}
-                onChange={(e) =>
-                  update({ roundLength: Number(e.target.value), holes: [] })
-                }
-              >
-                {[3, 6, 9, 12, 18].map((count) => (
-                  <option key={count} value={count}>
-                    {count} holes
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Tee
-              <select
-                value={draft.tee || "white"}
-                onChange={(e) =>
-                  update({ tee: e.target.value as "white" | "yellow" | "red" })
-                }
-              >
-                <option value="white">Whites</option>
-                <option value="yellow">Yellows</option>
-                <option value="red">Reds</option>
-              </select>
-            </label>
-          </div>
-        </section>
-      )}
+      <div className="round-actions">
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => setSetupOpen(true)}
+        >
+          ← Setup
+        </button>
+      </div>
       <div className="compact-hole-header">
         <strong>Hole {holeNumber}</strong>
         <span>Par {holePar(holeNumber)}</span>
@@ -1939,15 +2442,129 @@ function RoundMode({
           readings={readings}
           par={holePar(holeNumber)}
           distance={holeDistance(holeNumber, draft.tee || "white")}
+          weather={weather}
+          teeOrigin={currentHole.teeOrigin}
+          teeWind={teeWind}
+          teePlayingDistance={teeAdjustment?.effectiveDistanceM}
+          onCaptureTeeOrigin={async () => {
+            try {
+              const position = await getCurrentPosition();
+              updateHole({
+                teeOrigin: {
+                  latitude: position.latitude,
+                  longitude: position.longitude,
+                  accuracyM: position.accuracyM,
+                  capturedAt: position.capturedAt,
+                  source: "live-gps",
+                },
+                teeOriginObservations: position.accuracyM !== undefined && position.accuracyM <= TEE_ORIGIN_ACCURACY.usableM
+                  ? [...(currentHole.teeOriginObservations || []), { courseId: draft.courseId || "hermanus-golf-club", holeNumber, tee: draft.tee || "white", latitude: position.latitude, longitude: position.longitude, accuracyM: position.accuracyM, capturedAt: position.capturedAt, source: "live-gps" }]
+                  : currentHole.teeOriginObservations,
+              });
+            } catch {
+              // Tee Caddie remains usable without directional context.
+            }
+          }}
         />
-        {courseOpen && (
+      </div>
+      <div className="next-shot-row">
+        <button type="button" className="text-button" onClick={captureNextShot}>
+          {currentHole.latestShotContext ? "Refresh location" : "Next shot"}
+        </button>
+        {currentHole.latestShotContext && (
+          <span className="next-shot-context">
+            <span>{currentHole.latestShotContext.distanceToTargetM}m to centre</span>
+            {(() => {
+              const wind = calculateShotWind(
+                weather,
+                currentHole.latestShotContext!.shotBearingDeg,
+              );
+              const windText = wind ? formatShotWind(wind) : "";
+              const adjustment = calculateWindAdjustedDistance(
+                currentHole.latestShotContext!.distanceToTargetM,
+                wind,
+              );
+              return (
+                <>
+                  {windText ? <small>{windText}</small> : null}
+                  {adjustment && adjustment.appliedComponent !== "none" ? (
+                    <small>Plays ~{Math.round(adjustment.effectiveDistanceM)}m</small>
+                  ) : null}
+                </>
+              );
+            })()}
+            {currentHole.latestShotContext.position.accuracyM &&
+            currentHole.latestShotContext.position.accuracyM > 20
+              ? ` · GPS ±${Math.round(currentHole.latestShotContext.position.accuracyM)}m`
+              : ""}
+          </span>
+        )}
+        {nextShotStatus && <small>{nextShotStatus}</small>}
+      </div>
+      {currentHole.latestShotContext && (
+        <div className="shot-lie-selector" aria-label="Shot lie">
+          <span className="eyebrow">LIE</span>
+          <div className="shot-lie-chips">
+            {(["fairway", "rough", "bunker", "recovery"] as const).map((lie) => (
+              <button
+                key={lie}
+                type="button"
+                className={currentHole.latestShotContext?.lie === lie ? "active" : ""}
+                aria-pressed={currentHole.latestShotContext?.lie === lie}
+                onClick={() =>
+                  updateHole({
+                    latestShotContext: { ...currentHole.latestShotContext!, lie },
+                  })
+                }
+              >
+                {lie[0].toUpperCase() + lie.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {currentHole.latestShotContext && currentHole.latestShotContext.lie && (() => {
+        const wind = calculateShotWind(weather, currentHole.latestShotContext!.shotBearingDeg);
+        const adjustment = calculateWindAdjustedDistance(currentHole.latestShotContext!.distanceToTargetM, wind);
+        const adaptive = adaptiveCaddieDecision(
+          readings,
+          bag,
+          currentHole.latestShotContext!.distanceToTargetM,
+          adjustment?.effectiveDistanceM || currentHole.latestShotContext!.distanceToTargetM,
+          currentHole.latestShotContext.lie,
+        );
+        return adaptive.recommendedClub ? (
+          <button type="button" className="adaptive-caddie compact-panel" onClick={() => setShowAdaptiveWhy(!showAdaptiveWhy)}>
+            <span className="eyebrow">CADDIE · NEXT SHOT</span>
+            <strong>{clubDisplayLabel(adaptive.recommendedClub)}</strong>
+            <small>
+              {adaptive.reasons
+                .filter((reason) => ["adaptive-carry", "adaptive-playable"].includes(reason.key))
+                .map((reason) => reason.value)
+                .join(" · ")}
+            </small>
+            <span>{adaptive.reasons.find((reason) => reason.key === "adaptive-fit")?.value}</span>
+            {showAdaptiveWhy && <small className="adaptive-caddie-why">{adaptive.reasons.map((reason) => reason.value).filter(Boolean).join(" · ")}</small>}
+          </button>
+        ) : (
+          <section className="adaptive-caddie compact-panel">
+            <span className="eyebrow">CADDIE · NEXT SHOT</span>
+            <strong>{adaptive.status === "recovery-required" ? "Play back to safety" : "No suitable club"}</strong>
+          </section>
+        );
+      })()}
+      {courseOpen && (
+        <div
+          className="course-popup-overlay"
+          onClick={() => setCourseOpen(false)}
+        >
           <div className="map-wrap compact-map">
             <pre className="hole-diagram">
               {HERMANUS_HOLE_DIAGRAMS[holeNumber]}
             </pre>
           </div>
-        )}
-      </div>
+        </div>
+      )}
       <section className="hole-form">
         <label>
           Score
@@ -2047,18 +2664,125 @@ function Caddie({
   readings,
   par,
   distance,
+  weather,
+  teeOrigin,
+  teeWind,
+  teePlayingDistance,
+  onCaptureTeeOrigin,
 }: {
   readings: AppData["readings"];
   par: number;
   distance: number;
+  weather?: WeatherContext;
+  teeOrigin?: { latitude: number; longitude: number; accuracyM?: number };
+  teeWind?: ReturnType<typeof calculateShotWind>;
+  teePlayingDistance?: number;
+  onCaptureTeeOrigin?: () => Promise<void>;
 }) {
-  const plan = caddiePlan(readings, par, distance);
+  const [showDecision, setShowDecision] = useState(false);
+  const plan = caddiePlan(readings, par, teePlayingDistance || distance);
+  const decision = caddieDecision(readings, par, distance);
   if (!plan) return null;
   return (
-    <section className="caddie">
-      <span className="caddie-title">CADDIE</span>
-      <span className="eyebrow">PLAN</span>
-      <b>{plan.sequence.map((item) => item.club).join(" → ")}</b>
+    <section
+      className="caddie"
+      role="button"
+      tabIndex={0}
+      onClick={() => setShowDecision(true)}
+      onKeyDown={(event) => event.key === "Enter" && setShowDecision(true)}
+    >
+      <span className="caddie-title">TEE CADDIE</span>
+      <span className="eyebrow">BEST TEE CLUB</span>
+      <b>{clubDisplayLabel(plan.tee.club)}</b>
+      {!teeOrigin && onCaptureTeeOrigin && (
+        <button type="button" className="text-button tee-position-button" onClick={(event) => { event.stopPropagation(); void onCaptureTeeOrigin(); }}>
+          Use my position
+        </button>
+      )}
+      {teeOrigin && teeWind && teeWind.label && (
+        <small className="caddie-weather">{teeWind.label}</small>
+      )}
+      {weather && (
+        <small className="caddie-weather">
+          {weather.windDirectionLabel && weather.windSpeedKmh !== undefined
+            ? `${weather.windDirectionLabel} ${Math.round(weather.windSpeedKmh)} km/h`
+            : "Wind unavailable"}
+          {weather.temperatureC !== undefined
+            ? ` · ${Math.round(weather.temperatureC)}°C`
+            : ""}
+        </small>
+      )}
+      {showDecision && decision && (
+        <div
+          className="caddie-sheet-overlay"
+          onClick={(event) => {
+            event.stopPropagation();
+            setShowDecision(false);
+          }}
+        >
+          <div
+            className="caddie-sheet"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="caddie-sheet-heading">
+              <span className="eyebrow">WHY {clubDisplayLabel(decision.primaryClub || plan.tee.club)}?</span>
+              <button
+                type="button"
+                className="caddie-close"
+                aria-label="Close"
+                onClick={() => setShowDecision(false)}
+              >
+                ×
+              </button>
+            </div>
+            <h3>
+              {decision.primaryClub
+                ? `${decision.primaryClub} off the tee`
+                : "Selected club"}
+            </h3>
+            <p className="caddie-why">
+              {decision.reasons.find(
+                (reason) => reason.key === "risk-comparison",
+              )?.value ||
+                (decision.reasons.length
+                  ? "Selected from your available carry and risk data."
+                  : "Limited personal data for this club.")}
+            </p>
+            <p className="caddie-inline-metrics">
+              {decision.reasons
+                .filter((reason) =>
+                  [
+                    "primary-carry",
+                    "primary-playable",
+                    "primary-severe",
+                  ].includes(reason.key),
+                )
+                .map((reason) =>
+                  reason.key === "primary-carry"
+                    ? `${reason.value} carry`
+                    : reason.key === "primary-playable"
+                      ? `${reason.value} playable`
+                      : `${reason.value} severe`,
+                )
+                .join(" · ")}
+            </p>
+            {weather && (
+              <div className="caddie-conditions">
+                <span className="eyebrow">CONDITIONS</span>
+                <b>
+                  {weather.windDirectionLabel &&
+                  weather.windSpeedKmh !== undefined
+                    ? `${weather.windDirectionLabel} ${Math.round(weather.windSpeedKmh)} km/h`
+                    : "Weather unavailable"}
+                  {weather.temperatureC !== undefined
+                    ? ` · ${Math.round(weather.temperatureC)}°C`
+                    : ""}
+                </b>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -2182,17 +2906,29 @@ function ShotGroups({
     note: string,
   ) => {
     setShots(
-      shots.map((shot) =>
-        shot.phase === phase
-          ? {
-              ...shot,
-              outcome: shot.note === note ? undefined : outcome,
-              note: shot.note === note ? undefined : note,
-            }
-          : shot,
-      ),
+      shots.map((shot) => {
+        if (shot.phase !== phase) return shot;
+        const current =
+          shot.outcomes ||
+          (shot.note
+            ? [{ outcome: shot.outcome || "bad", note: shot.note }]
+            : []);
+        const selected = current.some(
+          (item) => item.outcome === outcome && item.note === note,
+        );
+        const outcomes = selected
+          ? current.filter(
+              (item) => !(item.outcome === outcome && item.note === note),
+            )
+          : [...current, { outcome, note }];
+        return {
+          ...shot,
+          outcomes,
+          outcome: outcomes[0]?.outcome,
+          note: outcomes[0]?.note,
+        };
+      }),
     );
-    setActivePhase(null);
   };
   return (
     <div className="shot-groups">
@@ -2237,7 +2973,19 @@ function ShotGroups({
                     type="button"
                     key={note}
                     className={
-                      shot.outcome === "good" && shot.note === note
+                      (
+                        shot.outcomes ||
+                        (shot.note
+                          ? [
+                              {
+                                outcome: shot.outcome || "bad",
+                                note: shot.note,
+                              },
+                            ]
+                          : [])
+                      ).some(
+                        (item) => item.outcome === "good" && item.note === note,
+                      )
                         ? "selected good"
                         : ""
                     }
@@ -2251,7 +2999,19 @@ function ShotGroups({
                     type="button"
                     key={note}
                     className={
-                      shot.outcome === "bad" && shot.note === note
+                      (
+                        shot.outcomes ||
+                        (shot.note
+                          ? [
+                              {
+                                outcome: shot.outcome || "bad",
+                                note: shot.note,
+                              },
+                            ]
+                          : [])
+                      ).some(
+                        (item) => item.outcome === "bad" && item.note === note,
+                      )
                         ? "selected bad"
                         : ""
                     }
