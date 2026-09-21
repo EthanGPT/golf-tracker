@@ -9,12 +9,14 @@ import {
   caddiePlan,
   caddieDecision,
   adaptiveCaddieDecision,
+  isValidGolfShotContext,
   teeRationale,
   convertMetres,
   median,
   recommendation,
   roundTotal,
   seedData,
+  roundHandicapIndex,
 } from "./domain";
 
 describe("distance calculations", () => {
@@ -140,6 +142,12 @@ describe("distance calculations", () => {
   });
 });
 
+describe("round handicap context", () => {
+  it("captures the latest handicap for a new round", () => expect(roundHandicapIndex(12.4)).toBe(12.4));
+  it("preserves a stored handicap when Settings changes", () => expect(roundHandicapIndex(8.1, 12.4)).toBe(12.4));
+  it("uses latest handicap only as an edit fallback for missing history", () => expect(roundHandicapIndex(8.1, undefined)).toBe(8.1));
+});
+
 describe("adaptive live caddie", () => {
   const readings = [
     ...Array.from({ length: 10 }, (_, index) => ({
@@ -189,6 +197,25 @@ describe("adaptive live caddie", () => {
     const result = adaptiveCaddieDecision(readings, ["6i"], 160, 160, "recovery");
     expect(result.status).toBe("recovery-required");
     expect(result.reasons[0].value).toContain("safety");
+  });
+
+  it("uses normal scoring for legitimate distances and wedge logic for short game", () => {
+    expect(adaptiveCaddieDecision(readings, ["6i"], 150, 150, "fairway", 450).status).toBe("recommended");
+    const wedgeReadings = [...readings, { id: "pw", club: "PW", distanceMetres: 95, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-19", createdAt: "2026-09-19" }];
+    expect(adaptiveCaddieDecision(wedgeReadings, ["PW"], 27, 27, "fairway", 450).recommendedClub).toBe("PW");
+  });
+
+  it.each(["fairway", "recovery", "rough", "bunker"] as const)("uses the same safe fallback for invalid %s location", (lie) => {
+    const result = adaptiveCaddieDecision(readings, ["6i", "PW"], 5439, 6309, lie, 450);
+    expect(result.status).toBe("invalid-location");
+    expect(result.recommendedClub).toBe("6i");
+    expect(result.reasons[0].value).toContain("outside the playable hole area");
+  });
+
+  it("rejects gross GPS errors without rejecting legitimate long holes", () => {
+    expect(isValidGolfShotContext(6309, 450)).toBe(false);
+    expect(isValidGolfShotContext(500, 500)).toBe(true);
+    expect(isValidGolfShotContext(150, 450, 300)).toBe(false);
   });
 });
 

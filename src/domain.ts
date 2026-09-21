@@ -35,6 +35,7 @@ export type AdaptiveCaddieStatus =
   | "insufficient-data"
   | "recovery-required"
   | "no-suitable-club";
+export type AdaptiveCaddieStatusWithLocation = AdaptiveCaddieStatus | "invalid-location";
 export type AdaptiveClubCandidate = {
   club: ClubName;
   carryM?: number;
@@ -55,7 +56,7 @@ export type AdaptiveCaddieDecision = {
   lie?: ShotLie;
   candidates: AdaptiveClubCandidate[];
   reasons: CaddieReason[];
-  status: AdaptiveCaddieStatus;
+  status: AdaptiveCaddieStatusWithLocation;
 };
 export type HoleShot = {
   id: string;
@@ -198,6 +199,10 @@ export type AppData = {
   lastRoundLength?: 9 | 18 | 27;
   lastRoundLoop?: "east" | "north" | "south";
 };
+
+export function roundHandicapIndex(latestHandicap: number | undefined, storedHandicap?: number) {
+  return storedHandicap ?? latestHandicap;
+}
 
 export type PracticePriority = {
   key: string;
@@ -604,7 +609,21 @@ export function adaptiveCaddieDecision(
   targetDistanceM: number,
   effectiveDistanceM: number,
   lie: ShotLie | undefined,
+  officialHoleDistanceM?: number,
+  gpsAccuracyM?: number,
 ): AdaptiveCaddieDecision {
+  if (!isValidGolfShotContext(targetDistanceM, officialHoleDistanceM, gpsAccuracyM)) {
+    const fallback = safeRecoveryClub(readings, bag);
+    return {
+      recommendedClub: fallback,
+      targetDistanceM,
+      effectiveDistanceM,
+      lie,
+      candidates: fallback ? [{ club: fallback, carryM: clubSummary(readings, fallback).typical, lieSuitability: 1, utility: 1 }] : [],
+      reasons: [{ key: "invalid-location", label: "Location check", value: "Live location is outside the playable hole area. Using safe fallback.", tone: "warning" }],
+      status: "invalid-location",
+    };
+  }
   if (!lie)
     return { targetDistanceM, effectiveDistanceM, candidates: [], reasons: [], status: "insufficient-data" };
   if (effectiveDistanceM <= 35 && (lie === "fairway" || lie === "rough")) {
@@ -612,7 +631,7 @@ export function adaptiveCaddieDecision(
     if (wedge) return { recommendedClub: wedge, targetDistanceM, effectiveDistanceM, lie, candidates: [{ club: wedge, carryM: clubSummary(readings, wedge).typical, lieSuitability: 1, utility: 1 }], reasons: [{ key: "short-game", label: "Reason", value: "Scoring wedge for a short approach", tone: "positive" }], status: "recommended" };
   }
   if (lie === "recovery") {
-    const recoveryClub = (bag || CLUBS).find((club) => ["6i", "7i", "8i", "9i"].includes(club) && clubSummary(readings, club).typical);
+    const recoveryClub = safeRecoveryClub(readings, bag);
     return {
       recommendedClub: recoveryClub,
       targetDistanceM,
@@ -648,6 +667,18 @@ export function adaptiveCaddieDecision(
   if (best.severeMissRate !== undefined) reasons.push({ key: "adaptive-severe", label: "Severe miss", value: `${Math.round(best.severeMissRate * 100)}% severe miss`, tone: best.severeMissRate > 0.15 ? "warning" : "neutral" });
   reasons.push({ key: "adaptive-fit", label: "Reason", value: best.carryM && best.carryM < effectiveDistanceM ? "Best fit for playing distance" : "Best distance/risk balance", tone: "positive" });
   return { recommendedClub: best.club, targetDistanceM, effectiveDistanceM, lie, candidates, reasons, status: "recommended" };
+}
+
+export function isValidGolfShotContext(distanceM: number, officialHoleDistanceM = 0, gpsAccuracyM?: number) {
+  if (!Number.isFinite(distanceM) || distanceM < 0) return false;
+  if (gpsAccuracyM !== undefined && (!Number.isFinite(gpsAccuracyM) || gpsAccuracyM > 250)) return false;
+  return distanceM <= Math.max(800, officialHoleDistanceM + 500);
+}
+
+export function safeRecoveryClub(readings: RangeReading[], bag?: ClubName[]) {
+  return ["6i", "7i", "8i", "9i"].find((club) =>
+    (bag || CLUBS).includes(club) && Boolean(clubSummary(readings, club).typical),
+  );
 }
 
 export function convertMetres(metres: number, units: "metres" | "yards") {
