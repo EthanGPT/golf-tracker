@@ -36,3 +36,44 @@ export function isSyncPending() {
     return false;
   }
 }
+
+function recordScore(record: unknown): number {
+  if (!record || typeof record !== "object") return 0;
+  return Object.keys(record).length + JSON.stringify(record).length / 1000;
+}
+
+function mergeById<T extends { id: string }>(local: T[] = [], cloud: T[] = []) {
+  const merged = new Map<string, T>();
+  for (const item of cloud) merged.set(item.id, item);
+  for (const item of local) {
+    const existing = merged.get(item.id);
+    if (!existing || recordScore(item) >= recordScore(existing)) merged.set(item.id, item);
+  }
+  return [...merged.values()];
+}
+
+function mergeRounds(local: AppData["rounds"], cloud: AppData["rounds"]) {
+  const merged = new Map<string, AppData["rounds"][number]>();
+  for (const round of cloud) merged.set(round.id, round);
+  for (const round of local) {
+    const existing = merged.get(round.id);
+    if (!existing || (existing.status !== "archived" && round.status === "archived") || recordScore(round) >= recordScore(existing)) merged.set(round.id, round);
+  }
+  return [...merged.values()];
+}
+
+export function mergeAppData(local: AppData | null, cloud: AppData | null): AppData | null {
+  if (!local) return cloud;
+  if (!cloud) return local;
+  const weeklyHistory = [...(cloud.weeklyHistory || []), ...(local.weeklyHistory || [])]
+    .filter((item, index, all) => all.findIndex((candidate) => candidate.weekStart === item.weekStart) === index);
+  return {
+    ...cloud,
+    ...local,
+    rounds: mergeRounds(local.rounds, cloud.rounds),
+    readings: mergeById(local.readings, cloud.readings),
+    handicapHistory: mergeById(local.handicapHistory, cloud.handicapHistory),
+    weeklyHistory,
+    weeklyPlan: recordScore(local.weeklyPlan) >= recordScore(cloud.weeklyPlan) ? local.weeklyPlan : cloud.weeklyPlan,
+  };
+}

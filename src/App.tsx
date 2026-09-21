@@ -59,6 +59,7 @@ import {
 } from "./geo";
 import {
   isSyncPending,
+  mergeAppData,
   loadLocalData,
   markSyncPending,
   saveLocalData,
@@ -207,7 +208,13 @@ function App() {
         setAuthReady(true);
       });
     const { data: listener } = supabase.auth.onAuthStateChange(
-      (_event, authSession) => setSession(authSession),
+      (event, authSession) => {
+        setSession(authSession);
+        if (event === "SIGNED_OUT") {
+          setData(null);
+          setDataReady(false);
+        }
+      },
     );
     return () => listener.subscription.unsubscribe();
   }, []);
@@ -218,11 +225,7 @@ function App() {
       const cloudData = await loadCloudData(session);
       if (!cancelled) {
         const localData = loadLocalData();
-        setData(
-          isSyncPending() && localData
-            ? localData
-            : cloudData || localData || seedData(),
-        );
+        setData(mergeAppData(localData, cloudData) || seedData());
         setDataReady(true);
       }
     })().catch((error) => {
@@ -257,7 +260,7 @@ function App() {
     }
   }, [data, session]);
   useEffect(() => {
-    if (!authReady || session || data) return;
+    if (!authReady || session || data || isCloudConfigured) return;
     setData(seedData());
     setDataReady(true);
   }, [authReady, session, data]);
