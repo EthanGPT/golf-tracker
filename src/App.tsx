@@ -36,6 +36,7 @@ import type {
   FocusCategory,
   HoleShot,
   RoundHole,
+  RoundCategory,
   Screen,
   ShotPhase,
 } from "./domain";
@@ -1717,22 +1718,56 @@ function Progress({
     "Putting",
     "Course management",
   ];
+  const shotPhaseCategory: Record<ShotPhase, FocusCategory> = {
+    tee: "Tee shot",
+    approach: "Approach",
+    "short-game": "Short game",
+    putting: "Putting",
+  };
+  const tagCategory: Record<RoundCategory, FocusCategory> = {
+    drive: "Tee shot",
+    wood: "Tee shot",
+    iron: "Approach",
+    chip: "Short game",
+    putt: "Putting",
+  };
+  const structuredCategoriesForHole = (hole: RoundHole) => {
+    const tagged = (hole.tags || [])
+      .filter((tag) => tag.type === "went-wrong")
+      .map((tag) => tagCategory[tag.category]);
+    const shot = (hole.shots || [])
+      .filter((item) => item.outcome === "bad")
+      .map((item) => shotPhaseCategory[item.phase]);
+    return [...new Set([...tagged, ...shot])];
+  };
   const categoryStats = categories.map((category) => {
-    const items = holes.filter((hole) => hole.focusCategory === category);
+    const items = holes.filter((hole) => {
+      const structured = structuredCategoriesForHole(hole);
+      return structured.length
+        ? structured.includes(category)
+        : hole.focusCategory === category;
+    });
+    const troubleItems = items.filter(
+      (hole) =>
+        hole.wentWrong.trim() ||
+        (hole.tags || []).some((tag) => tag.type === "went-wrong") ||
+        (hole.shots || []).some((shot) => shot.outcome === "bad"),
+    );
     return {
       category,
-      average: items.length
-        ? items.reduce((sum, hole) => sum + hole.score, 0) / items.length
+      average: troubleItems.length
+        ? troubleItems.reduce((sum, hole) => sum + hole.score, 0) / troubleItems.length
         : 0,
-      count: items.length,
-      trouble: items.filter(
-        (hole) =>
-          hole.wentWrong.trim() ||
-          (hole.tags || []).some((tag) => tag.type === "went-wrong"),
-      ).length,
+      count: troubleItems.length,
+      trouble: troubleItems.length,
     };
   });
-  const maxTrouble = Math.max(...categoryStats.map((item) => item.trouble), 1);
+  const rankedCategoryStats = [
+    ...categoryStats.filter((item) => item.count).sort((a, b) =>
+      b.trouble - a.trouble || b.average - a.average,
+    ),
+    ...categoryStats.filter((item) => !item.count),
+  ];
   const clubStats = DISTANCE_CLUBS.map((club) => {
     const readings = data.readings.filter((reading) => reading.club === club);
     const usable = readings.filter((reading) => !reading.severeMiss);
@@ -1898,8 +1933,8 @@ function Progress({
           <Target size={22} />
         </div>
         <div className="form-list">
-          {categoryStats.map((item) => (
-            <div className="form-row" key={item.category}>
+          {rankedCategoryStats.map((item, index) => (
+            <div className={`form-row ${item.count ? "has-data" : "no-data"}`} key={item.category}>
               <div>
                 <strong>{item.category}</strong>
                 <small>
@@ -1908,11 +1943,8 @@ function Progress({
                     : "No data yet"}
                 </small>
               </div>
-              <div className="form-bar">
-                <span
-                  style={{ width: `${(item.trouble / maxTrouble) * 100}%` }}
-                />
-              </div>
+              {item.count > 0 && index === 0 && <span className="form-leak-label">Biggest leak</span>}
+              {item.count > 0 && index > 0 && <span className="form-rank">#{index + 1}</span>}
             </div>
           ))}
         </div>

@@ -1062,7 +1062,7 @@ select:focus {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
   .form-row {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 40%);
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 8px;
   }
   .analytics-hero strong {
@@ -1290,12 +1290,13 @@ select:focus {
 }
 .form-row {
   display: grid;
-  grid-template-columns: 1fr 42%;
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
   align-items: center;
   border-top: 1px solid #e8ede5;
-  padding: 12px 0 0;
-  margin-top: 12px;
+  padding: 9px 0 0;
+  margin-top: 9px;
+  min-height: 42px;
 }
 .form-row strong,
 .club-label strong {
@@ -1309,6 +1310,14 @@ select:focus {
   font-size: 11px;
   margin-top: 4px;
 }
+.form-row.no-data { min-height: 36px; }
+.form-leak-label,
+.form-rank {
+  color: var(--muted);
+  font: 10px "DM Mono", monospace;
+  white-space: nowrap;
+}
+.form-leak-label { color: #6c8249; }
 .form-bar,
 .dispersion-track {
   height: 7px;
@@ -2286,7 +2295,7 @@ select:focus {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: var(--accent);
+  background: #6f963f;
 }
 
 .insights-clubs .club-health-row.risk i em {
