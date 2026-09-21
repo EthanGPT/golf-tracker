@@ -43,6 +43,16 @@ export function getCurrentPosition(): Promise<GeoPosition> {
   });
 }
 
+export function watchPosition(onPosition: (position: GeoPosition) => void, onError?: (error: LocationError) => void) {
+  if (!navigator.geolocation) { onError?.(new LocationError("unsupported")); return () => undefined; }
+  const id = navigator.geolocation.watchPosition(
+    (position) => onPosition({ latitude: position.coords.latitude, longitude: position.coords.longitude, accuracyM: position.coords.accuracy, capturedAt: new Date().toISOString() }),
+    (error) => onError?.(new LocationError(error.code === 1 ? "denied" : error.code === 3 ? "timeout" : "unavailable")),
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 },
+  );
+  return () => navigator.geolocation.clearWatch(id);
+}
+
 const radians = (value: number) => (value * Math.PI) / 180;
 
 export function distanceBetweenMeters(a: LatLng, b: LatLng) {

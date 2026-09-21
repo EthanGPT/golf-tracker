@@ -161,6 +161,7 @@ export type Round = {
   tee?: string;
   teeId?: string;
   archivedAt?: string;
+  currentHoleIndex?: number;
 };
 
 export type WeeklyPlan = {
@@ -606,6 +607,10 @@ export function adaptiveCaddieDecision(
 ): AdaptiveCaddieDecision {
   if (!lie)
     return { targetDistanceM, effectiveDistanceM, candidates: [], reasons: [], status: "insufficient-data" };
+  if (effectiveDistanceM <= 35 && (lie === "fairway" || lie === "rough")) {
+    const wedge = ["PW", "SW"].find((club) => (bag || CLUBS).includes(club) && clubSummary(readings, club).typical);
+    if (wedge) return { recommendedClub: wedge, targetDistanceM, effectiveDistanceM, lie, candidates: [{ club: wedge, carryM: clubSummary(readings, wedge).typical, lieSuitability: 1, utility: 1 }], reasons: [{ key: "short-game", label: "Reason", value: "Scoring wedge for a short approach", tone: "positive" }], status: "recommended" };
+  }
   if (lie === "recovery") {
     const recoveryClub = (bag || CLUBS).find((club) => ["6i", "7i", "8i", "9i"].includes(club) && clubSummary(readings, club).typical);
     return {

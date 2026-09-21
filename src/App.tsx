@@ -53,6 +53,7 @@ import {
   bearingBetween,
   distanceBetweenMeters,
   getCurrentPosition,
+  watchPosition,
   LocationError,
   TEE_ORIGIN_ACCURACY,
 } from "./geo";
@@ -338,24 +339,15 @@ function App() {
       teeId: data.preferredTee || "white",
         };
     setRoundDraft(next);
+    updateData((current) => ({ ...current, rounds: current.rounds.some((round) => round.id === next.id) ? current.rounds.map((round) => round.id === next.id ? next : round) : [...current.rounds, next] }));
     const resuming = Boolean(unfinished && !roundSetupOpen);
     setRoundSetupOpen(!resuming);
     setRoundHasStarted(resuming);
     setScreen("round");
   };
-  const discardRound = () => {
-    const draftId = roundDraft?.id;
-    updateData((current) => ({
-      ...current,
-      rounds: current.rounds.filter(
-        (round) =>
-          round.status !== "in-progress" && (!draftId || round.id !== draftId),
-      ),
-    }));
-    setRoundDraft(null);
-    setRoundSetupOpen(true);
-    setRoundHasStarted(false);
-    setScreen("today");
+  const persistRoundDraft = (next: AppData["rounds"][number]) => {
+    setRoundDraft(next);
+    updateData((current) => ({ ...current, rounds: current.rounds.some((round) => round.id === next.id) ? current.rounds.map((round) => round.id === next.id ? next : round) : [...current.rounds, next] }));
   };
   const saveHole = (submittedHole?: RoundHole) => {
     if (!roundDraft) return null;
@@ -388,7 +380,7 @@ function App() {
           )
         : [...current.rounds, updated],
     }));
-    setRoundDraft(updated);
+    persistRoundDraft(updated);
     setRoundNotice("Saved");
     return updated;
   };
@@ -402,9 +394,7 @@ function App() {
     };
     updateData((current) => ({
       ...current,
-      rounds: current.rounds.map((round) =>
-        round.id === updated.id ? updated : round,
-      ),
+      rounds: current.rounds.some((round) => round.id === updated.id) ? current.rounds.map((round) => round.id === updated.id ? updated : round) : [...current.rounds, updated],
       weeklyPlan:
         current.weeklyPlan.weekStart === startOfWeek()
           ? { ...current.weeklyPlan, roundComplete: true }
@@ -558,14 +548,13 @@ function App() {
             readings={data.readings}
             bag={data.bag}
             draft={roundDraft}
-            setDraft={setRoundDraft}
+            setDraft={persistRoundDraft}
             notice={roundNotice}
             setNotice={setRoundNotice}
             startRound={startRound}
             saveHole={saveHole}
             archiveRound={archiveRound}
             exitRound={() => setScreen("today")}
-            discardRound={discardRound}
             setupOpen={roundSetupOpen}
             setSetupOpen={setRoundSetupOpen}
             hasStarted={roundHasStarted}
@@ -2221,18 +2210,16 @@ function RoundSetup({
   setDraft,
   startRound,
   exitRound,
-  discardRound,
 }: {
   draft: AppData["rounds"][number];
   setDraft: (round: AppData["rounds"][number]) => void;
   startRound: () => void;
   exitRound: () => void;
-  discardRound: () => void;
 }) {
   const loop = draft.loop || "east";
   const length = draft.roundLength || 9;
   const update = (patch: Partial<typeof draft>) =>
-    setDraft({ ...draft, ...patch, holes: [] });
+    setDraft({ ...draft, ...patch });
   return (
     <div className="stack fade-in round-screen round-setup-screen">
       <div className="round-actions">
@@ -2313,7 +2300,7 @@ function RoundSetup({
         <button
           type="button"
           className="text-button exit-round-button"
-          onClick={discardRound}
+          onClick={exitRound}
         >
           Exit round
         </button>
@@ -2332,7 +2319,6 @@ function RoundMode({
   saveHole,
   archiveRound,
   exitRound,
-  discardRound,
   setupOpen,
   setSetupOpen,
   hasStarted,
@@ -2349,7 +2335,6 @@ function RoundMode({
   saveHole: (hole?: RoundHole) => AppData["rounds"][number] | null;
   archiveRound: (round?: AppData["rounds"][number] | null) => void;
   exitRound: () => void;
-  discardRound: () => void;
   setupOpen: boolean;
   setSetupOpen: (open: boolean) => void;
   hasStarted: boolean;
@@ -2361,6 +2346,8 @@ function RoundMode({
   const [nextShotStatus, setNextShotStatus] = useState("");
   const [teePositionStatus, setTeePositionStatus] = useState("");
   const [showAdaptiveWhy, setShowAdaptiveWhy] = useState(false);
+  const latestPosition = useRef<Awaited<ReturnType<typeof getCurrentPosition>> | null>(null);
+  useEffect(() => watchPosition((position) => { latestPosition.current = position; }), []);
   if (!draft)
     return (
       <div className="empty-state fade-in">
@@ -2382,7 +2369,6 @@ function RoundMode({
         }}
         setDraft={setDraft}
         exitRound={exitRound}
-        discardRound={discardRound}
       />
     );
   const loop = draft.loop || "east";
@@ -2442,6 +2428,7 @@ function RoundMode({
   const updateHole = (patch: Partial<typeof currentHole>) =>
     setDraft({
       ...draft,
+      currentHoleIndex: index,
       holes: [
         ...draft.holes.filter((hole) => hole.holeNumber !== holeNumber),
         { ...currentHole, ...patch },
@@ -2460,7 +2447,8 @@ function RoundMode({
     }
     setNextShotStatus("Getting location…");
     try {
-      const position = await getCurrentPosition();
+      const cached = latestPosition.current;
+      const position = cached && Date.now() - Date.parse(cached.capturedAt) < 15000 && (cached.accuracyM || Infinity) <= 30 ? cached : await getCurrentPosition();
       const context = {
         holeNumber,
         position,
@@ -2547,7 +2535,7 @@ function RoundMode({
       </div>
       <div className="next-shot-row">
         <button type="button" className="text-button" onClick={captureNextShot}>
-          {currentHole.latestShotContext ? "Refresh location" : "Next shot"}
+          Next Shot
         </button>
         {currentHole.latestShotContext && (
           <span className="next-shot-context">
