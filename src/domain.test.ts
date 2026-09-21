@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { RoundHole } from "./domain";
 import {
   CLUBS,
   DISTANCE_CLUBS,
@@ -17,6 +18,10 @@ import {
   roundTotal,
   seedData,
   roundHandicapIndex,
+  getOnCourseClubAdjustment,
+  formMapCategoryStats,
+  normalizedRoundScore,
+  roundProgressInsights,
 } from "./domain";
 
 describe("distance calculations", () => {
@@ -216,6 +221,73 @@ describe("adaptive live caddie", () => {
     expect(isValidGolfShotContext(6309, 450)).toBe(false);
     expect(isValidGolfShotContext(500, 500)).toBe(true);
     expect(isValidGolfShotContext(150, 450, 300)).toBe(false);
+  });
+
+  const evidenceRound = (notes: string[], actualDistanceM?: number) => ({
+    id: crypto.randomUUID(), date: "2026-09-19", courseName: "Test", overallNote: "", status: "archived" as const,
+    holes: [{ holeNumber: 1, score: 4, focusCategory: "Approach" as const, wentRight: "", wentWrong: "", shots: [{ id: crypto.randomUUID(), phase: "approach" as const, club: "7i", actualDistanceM, outcomes: notes.map((note) => ({ outcome: "bad" as const, note })) }] }],
+  });
+  it("ignores fewer than five subjective observations", () => expect(getOnCourseClubAdjustment([evidenceRound(["Short"]), evidenceRound(["Short"])], "7i", 140).adjustmentM).toBe(0));
+  it("caps subjective short/long modifiers and treats good distance as stabilizing evidence", () => {
+    expect(getOnCourseClubAdjustment(Array.from({ length: 6 }, () => evidenceRound(["Short"])), "7i", 140).adjustmentM).toBe(3);
+    expect(getOnCourseClubAdjustment(Array.from({ length: 10 }, () => evidenceRound(["Long"])), "7i", 140).adjustmentM).toBe(-6);
+    expect(getOnCourseClubAdjustment(Array.from({ length: 3 }, () => evidenceRound(["Short"])).concat(Array.from({ length: 3 }, () => evidenceRound(["Good distance"]))), "7i", 140).adjustmentM).toBe(0);
+  });
+  it("uses actual distance as the authoritative signal and ignores tiny samples", () => {
+    expect(getOnCourseClubAdjustment(Array.from({ length: 4 }, () => evidenceRound([], 130)), "7i", 140).adjustmentM).toBe(0);
+    expect(getOnCourseClubAdjustment(Array.from({ length: 5 }, () => evidenceRound(["Short"], 145)), "7i", 140).adjustmentM).toBe(-5);
+  });
+});
+
+describe("Form Map observation semantics", () => {
+  const stats = (hole: RoundHole) => formMapCategoryStats([{ id: "r", date: "2026-09-19", courseName: "Test", overallNote: "", status: "archived", holes: [hole] }]);
+  const base = { holeNumber: 1, score: 4, focusCategory: "Approach" as const, wentRight: "", wentWrong: "" };
+  it("counts positive putting and short-game evidence without trouble", () => {
+    expect(stats({ ...base, focusCategory: "Putting", shots: [{ id: "p", phase: "putting", club: "Putter", outcomes: [{ outcome: "good", note: "Good speed" }] }] }).find((item) => item.category === "Putting")).toMatchObject({ observationCount: 1, troubleCount: 0 });
+    expect(stats({ ...base, focusCategory: "Short game", shots: [{ id: "s", phase: "short-game", club: "SW", outcome: "good", note: "Good chip on" }] }).find((item) => item.category === "Short game")).toMatchObject({ observationCount: 1, troubleCount: 0 });
+  });
+  it("counts bad and legacy evidence as trouble, including multi-outcomes", () => {
+    expect(stats({ ...base, focusCategory: "Putting", shots: [{ id: "p", phase: "putting", club: "Putter", outcomes: [{ outcome: "good", note: "Good speed" }, { outcome: "bad", note: "Three-putt" }] }] }).find((item) => item.category === "Putting")).toMatchObject({ observationCount: 1, troubleCount: 1 });
+    expect(stats({ ...base, tags: [{ category: "chip", outcome: "Chunked", type: "went-wrong" }] }).find((item) => item.category === "Short game")).toMatchObject({ observationCount: 1, troubleCount: 1 });
+  });
+  it("does not treat course-management focus as a structured Form Map category", () => {
+    expect(stats({ ...base, focusCategory: "Course management" }).find((item) => item.category === "Course management")).toBeUndefined();
+    expect(stats(base).find((item) => item.category === "Putting")).toMatchObject({ observationCount: 0, troubleCount: 0 });
+  });
+  it("does not let trouble in one phase mark another phase as trouble", () => {
+    const result = stats({ ...base, focusCategory: "Tee shot", shots: [
+      { id: "t", phase: "tee", club: "Dr", outcome: "good", note: "Good contact" },
+      { id: "p", phase: "putting", club: "Putter", outcome: "bad", note: "Three-putt" },
+    ] });
+    expect(result.find((item) => item.category === "Tee shot")).toMatchObject({ observationCount: 1, troubleCount: 0 });
+    expect(result.find((item) => item.category === "Putting")).toMatchObject({ observationCount: 1, troubleCount: 1 });
+  });
+});
+
+describe("mixed-length round normalization", () => {
+  it("converts an 18-hole score to a comparable 9-hole equivalent", () => {
+    const round = { id: "r", date: "2026-09-19", courseName: "Test", overallNote: "", status: "archived" as const, totalScore: 90, holes: Array.from({ length: 18 }, (_, index) => ({ holeNumber: index + 1, score: 5, focusCategory: "Approach" as const, wentRight: "", wentWrong: "" })) };
+    expect(normalizedRoundScore(round)).toBe(45);
+  });
+});
+
+describe("round progression insights", () => {
+  const makeRound = (date: string, category: "Tee shot" | "Approach", trouble: number, holes = 9) => ({
+    id: date, date, courseName: "Test", overallNote: "", status: "archived" as const,
+    holes: Array.from({ length: holes }, (_, index) => ({ holeNumber: index + 1, score: 4, focusCategory: category, wentRight: "", wentWrong: index < trouble ? "Trouble" : "", tags: [] })),
+  });
+  it("detects improving, worsening, stable, and insufficient data directions", () => {
+    const improving = roundProgressInsights([makeRound("2026-01-01", "Tee shot", 5), makeRound("2026-01-02", "Tee shot", 5), makeRound("2026-01-03", "Tee shot", 1), makeRound("2026-01-04", "Tee shot", 1)]).find((item) => item.label === "Tee shot");
+    expect(improving?.direction).toBe("improving");
+    const worsening = roundProgressInsights([makeRound("2026-01-01", "Approach", 0), makeRound("2026-01-02", "Approach", 0), makeRound("2026-01-03", "Approach", 5), makeRound("2026-01-04", "Approach", 5)]).find((item) => item.label === "Approach");
+    expect(worsening?.direction).toBe("worsening");
+    const stable = roundProgressInsights([makeRound("2026-01-01", "Tee shot", 2), makeRound("2026-01-02", "Tee shot", 2), makeRound("2026-01-03", "Tee shot", 2), makeRound("2026-01-04", "Tee shot", 2)]).find((item) => item.label === "Tee shot");
+    expect(stable?.direction).toBe("stable");
+    expect(roundProgressInsights([makeRound("2026-01-01", "Tee shot", 2), makeRound("2026-01-02", "Tee shot", 2)]).find((item) => item.label === "Tee shot")?.direction).toBe("insufficient-data");
+  });
+  it("normalizes 9 and 18-hole windows by holes played", () => {
+    const insight = roundProgressInsights([makeRound("2026-01-01", "Tee shot", 6, 18), makeRound("2026-01-02", "Tee shot", 6, 18), makeRound("2026-01-03", "Tee shot", 1, 9), makeRound("2026-01-04", "Tee shot", 1, 9)]).find((item) => item.label === "Tee shot");
+    expect(insight?.direction).toBe("improving");
   });
 });
 

@@ -1225,7 +1225,7 @@ select:focus {
 
 .analytics-hero {
   display: grid;
-  grid-template-columns: 112px 1fr;
+  grid-template-columns: 112px 1fr 112px;
   gap: 16px;
   align-items: center;
   padding: 17px;
@@ -1239,7 +1239,23 @@ select:focus {
   font-size: 38px;
   letter-spacing: -2px;
 }
+.analytics-hero .round-trend-score {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: -1px;
+}
 .analytics-hero > div:first-child > span:last-child {
+  color: #a6c0aa;
+  font-size: 11px;
+}
+.analytics-hero-compare {
+  text-align: right;
+}
+.analytics-hero-compare strong {
+  margin: 8px 0 3px;
+  font-size: 28px;
+}
+.analytics-hero-compare > span:last-child {
   color: #a6c0aa;
   font-size: 11px;
 }
@@ -1559,6 +1575,43 @@ select:focus {
 .scorecard-row .even {
   color: var(--forest);
 }
+.scorecard-row[role="button"] {
+  cursor: pointer;
+}
+.scorecard-row[role="button"]:hover,
+.scorecard-row[role="button"]:focus-visible {
+  background: #f0f4ec;
+  outline: none;
+}
+.scorecard-score {
+  display: inline-grid;
+  place-items: center;
+  width: 27px;
+  height: 27px;
+  font-weight: 800;
+}
+.scorecard-score span {
+  display: grid;
+  place-items: center;
+  width: 23px;
+  height: 23px;
+}
+.scorecard-score.birdie span {
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+.scorecard-score.eagle span {
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 2px var(--surface, #fff), inset 0 0 0 3.5px currentColor;
+}
+.scorecard-score.bogey span {
+  border: 1.5px solid currentColor;
+}
+.scorecard-score.double-bogey span {
+  border: 1.5px solid currentColor;
+  box-shadow: inset 0 0 0 2px var(--surface, #fff), inset 0 0 0 3.5px currentColor;
+}
 .scorecard-feedback {
   display: grid;
   gap: 3px;
@@ -1573,6 +1626,134 @@ select:focus {
 }
 .scorecard-feedback .wrong {
   color: #a6604c;
+}
+.round-length-tag {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+.round-progress-list {
+  display: grid;
+  gap: 12px;
+}
+.insights-overview .round-progress-panel,
+.insights-clubs .round-progress-panel,
+.insights-rounds .insights-form-map,
+.insights-clubs .insights-form-map {
+  display: none;
+}
+.round-progress-item {
+  display: grid;
+  gap: 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.round-progress-item:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+.round-progress-item > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.round-progress-item small {
+  color: var(--muted);
+  line-height: 1.35;
+  font-size: 11px;
+}
+.progress-direction {
+  font-weight: 800;
+  white-space: nowrap;
+}
+.progress-direction.improving { color: #557d39; }
+.progress-direction.worsening { color: #a6604c; }
+.progress-direction.stable,
+.progress-direction.insufficient-data { color: var(--muted); }
+.club-round-evidence {
+  display: grid;
+  gap: 3px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.club-round-evidence small {
+  color: var(--muted);
+}
+.club-area-improve {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid #d5b4a7;
+  border-left: 4px solid #a6604c;
+  border-radius: 7px;
+  background: #fff8f5;
+}
+.club-area-improve span {
+  color: #a6604c;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .06em;
+}
+.club-area-improve strong { color: #6f4033; }
+.club-area-improve small { color: #8c665c; }
+.club-round-evidence > em {
+  justify-self: end;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+}
+.club-insights-list {
+  display: grid;
+  gap: 8px;
+}
+.club-insight-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.club-insight-row:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+.club-insight-row span {
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+}
+.edit-save-button {
+  border: 2px solid var(--forest);
+  border-radius: 8px;
+  background: #e9f1e3;
+  color: var(--forest);
+  font-weight: 800;
+  padding: 10px 16px;
+  box-shadow: 0 0 0 3px rgba(71, 104, 53, 0.12);
+}
+.edit-save-button:hover,
+.edit-save-button:focus-visible {
+  background: #dcebd2;
+  outline: 3px solid rgba(71, 104, 53, 0.22);
+  outline-offset: 2px;
+}
+.round-edit-panel {
+  display: grid;
+  gap: 10px;
+}
+.round-edit-heading {
+  display: block;
+  width: 100%;
+  margin-bottom: 2px;
+}
+.edit-handicap-field {
+  display: grid;
+  gap: 5px;
+  width: 100%;
 }
 .shot-groups {
   display: grid;

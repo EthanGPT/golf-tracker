@@ -29,6 +29,9 @@ import {
   personalisedRecommendation,
   roundTotal,
   roundHandicapIndex,
+  normalizedRoundScore,
+  formMapCategoryStats,
+  roundProgressInsights,
   seedData,
   startOfWeek,
 } from "./domain";
@@ -38,7 +41,6 @@ import type {
   FocusCategory,
   HoleShot,
   RoundHole,
-  RoundCategory,
   Screen,
   ShotPhase,
 } from "./domain";
@@ -553,6 +555,7 @@ function App() {
         {screen === "round" && (
           <RoundMode
             readings={data.readings}
+            rounds={data.rounds.filter((round) => round.status === "archived")}
             bag={data.bag}
             draft={roundDraft}
             setDraft={persistRoundDraft}
@@ -727,11 +730,18 @@ function Today({
     ["Approach distance session", "Calibrate your scoring irons."],
     ["Course-management session", "Play a round and record decisions."],
   ];
+  const weeklyPriorities = rec.priorities.filter((priority, index, priorities) =>
+    priorities.findIndex((candidate) => candidate.phaseLabel === priority.phaseLabel) === index,
+  );
   const practiceFocus = Array.from({ length: practiceCount }, (_, index) => [
     `practiceSession:${index}`,
-    rec.priorities[index]?.drill ||
+    weeklyPriorities[index]
+      ? `${weeklyPriorities[index].drill} · ${weeklyPriorities[index].clubGroup}`
+      :
       fallbackPractice[index % fallbackPractice.length][0],
-    rec.priorities[index]?.evidence ||
+    weeklyPriorities[index]
+      ? `${weeklyPriorities[index].phaseLabel} · ${weeklyPriorities[index].evidence}`
+      :
       fallbackPractice[index % fallbackPractice.length][1],
   ]);
   return (
@@ -766,6 +776,7 @@ function Today({
         <div className="metric">
           <span>Latest round</span>
           <strong>{latestRound?.totalScore ?? "No round"}</strong>
+          {latestRound && <small className="round-length-tag">{latestRound.holes.filter((hole) => hole.score > 0).length || latestRound.holes.length} holes</small>}
         </div>
         <div className="metric">
           <span>This week</span>
@@ -795,8 +806,8 @@ function Today({
           <div className="priority-list">
             {rec.priorities.slice(0, 3).map((priority) => (
               <div className="priority-item" key={priority.key}>
-                <strong>{priority.drill}</strong>
-                <small>{priority.evidence}</small>
+              <strong>{priority.drill}</strong>
+              <small>{priority.clubGroup} · {priority.phaseLabel} · {priority.evidence}</small>
               </div>
             ))}
           </div>
@@ -1177,7 +1188,7 @@ function MiniLineChart({ values }: { values: number[] }) {
   );
 }
 
-function ClubFormPanel({ readings }: { readings: AppData["readings"] }) {
+function ClubFormPanel({ readings, rounds }: { readings: AppData["readings"]; rounds: AppData["rounds"] }) {
   const clubs = DISTANCE_CLUBS.filter((club) =>
     readings.some((reading) => reading.club === club),
   );
@@ -1213,6 +1224,16 @@ function ClubFormPanel({ readings }: { readings: AppData["readings"] }) {
   );
   const average = carryTrend.at(-1);
   const change = carryTrend.length > 1 ? average! - carryTrend[0] : undefined;
+  const roundShots = rounds.flatMap((round) => round.holes.flatMap((hole) => hole.shots || [])).filter((shot) => shot.club === club);
+  const badShots = roundShots.filter((shot) => shot.outcome === "bad" || (shot.outcomes || []).some((outcome) => outcome.outcome === "bad"));
+  const badNotes = badShots.flatMap((shot) => [
+    ...(shot.outcomes || []).filter((outcome) => outcome.outcome === "bad").map((outcome) => outcome.note),
+    ...(shot.outcomes?.length ? [] : shot.outcome === "bad" && shot.note ? [shot.note] : []),
+  ]);
+  const strongestIssue = [...new Set(badNotes)].map((note) => ({ note, count: badNotes.filter((item) => item === note).length })).sort((a, b) => b.count - a.count)[0];
+  const actualDistances = roundShots.map((shot) => shot.actualDistanceM).filter((distance): distance is number => distance !== undefined && distance >= 5);
+  const actualMedian = actualDistances.length ? [...actualDistances].sort((a, b) => a - b)[Math.floor(actualDistances.length / 2)] : undefined;
+  const rangeCarry = average;
   return (
     <section className="panel club-form-panel">
       <div className="section-heading">
@@ -1269,8 +1290,9 @@ function ClubFormPanel({ readings }: { readings: AppData["readings"] }) {
               </i>
             </div>
           </div>
+          <div className="club-round-evidence"><span className="eyebrow">ROUND SIGNAL</span>{strongestIssue && <div className="club-area-improve"><span>AREA TO IMPROVE</span><strong>{strongestIssue.note}</strong><small>({strongestIssue.count})</small></div>}{actualMedian !== undefined && <small>On-course median: {actualMedian}m{rangeCarry ? ` · ${actualMedian - Math.round(rangeCarry)}m vs range carry` : ""}</small>}{!strongestIssue && actualMedian === undefined && <small>No club-linked round evidence recorded for {clubDisplayLabel(club)} yet.</small>}</div>
           <p className="chart-caption">
-            Recent form across logged range shots.
+            Range carry and reliability from logged shots.
           </p>
         </>
       ) : (
@@ -1711,65 +1733,21 @@ function Progress({
       : []),
     data.weeklyPlan.roundComplete,
   ].filter(Boolean).length;
-  const scores = recent.map((round) => round.totalScore || roundTotal(round));
-  const holes = recent.flatMap((round) => round.holes);
-  const categories: FocusCategory[] = [
-    "Tee shot",
-    "Approach",
-    "Short game",
-    "Putting",
-    "Course management",
-  ];
-  const shotPhaseCategory: Record<ShotPhase, FocusCategory> = {
-    tee: "Tee shot",
-    approach: "Approach",
-    "short-game": "Short game",
-    putting: "Putting",
-  };
-  const tagCategory: Record<RoundCategory, FocusCategory> = {
-    drive: "Tee shot",
-    wood: "Tee shot",
-    iron: "Approach",
-    chip: "Short game",
-    putt: "Putting",
-  };
-  const structuredCategoriesForHole = (hole: RoundHole) => {
-    const tagged = (hole.tags || [])
-      .filter((tag) => tag.type === "went-wrong")
-      .map((tag) => tagCategory[tag.category]);
-    const shot = (hole.shots || [])
-      .filter((item) => item.outcome === "bad")
-      .map((item) => shotPhaseCategory[item.phase]);
-    return [...new Set([...tagged, ...shot])];
-  };
-  const categoryStats = categories.map((category) => {
-    const items = holes.filter((hole) => {
-      const structured = structuredCategoriesForHole(hole);
-      return structured.length
-        ? structured.includes(category)
-        : hole.focusCategory === category;
-    });
-    const troubleItems = items.filter(
-      (hole) =>
-        hole.wentWrong.trim() ||
-        (hole.tags || []).some((tag) => tag.type === "went-wrong") ||
-        (hole.shots || []).some((shot) => shot.outcome === "bad"),
-    );
-    return {
-      category,
-      average: troubleItems.length
-        ? troubleItems.reduce((sum, hole) => sum + hole.score, 0) / troubleItems.length
-        : 0,
-      count: troubleItems.length,
-      trouble: troubleItems.length,
-    };
+  const scores = recent.map((round) => {
+    const playedHoles = round.holes.filter((hole) => hole.score > 0).length || round.holes.length;
+    const score = round.totalScore || roundTotal(round);
+    const par = round.holes.reduce((sum, hole) => sum + holePar(hole.holeNumber), 0);
+    return playedHoles ? ((score - par) / playedHoles) * 18 : 0;
   });
+  const categoryStats = formMapCategoryStats(data.rounds, holePar);
   const rankedCategoryStats = [
-    ...categoryStats.filter((item) => item.count).sort((a, b) =>
-      b.trouble - a.trouble || b.average - a.average,
+    ...categoryStats.filter((item) => item.troubleCount).sort((a, b) =>
+      b.troubleCount - a.troubleCount || b.averageTroubleScore - a.averageTroubleScore,
     ),
-    ...categoryStats.filter((item) => !item.count),
+    ...categoryStats.filter((item) => !item.troubleCount && item.observationCount),
+    ...categoryStats.filter((item) => !item.observationCount),
   ];
+  const progressInsights = roundProgressInsights(data.rounds);
   const clubStats = DISTANCE_CLUBS.map((club) => {
     const readings = data.readings.filter((reading) => reading.club === club);
     const usable = readings.filter((reading) => !reading.severeMiss);
@@ -1811,6 +1789,7 @@ function Progress({
     .slice(-8)
     .map((item) => item.index);
   const latest = scores.at(-1);
+  const latestRound = recent.at(-1);
   const previous = scores.length > 1 ? scores.at(-2) : undefined;
   const scoreDelta =
     latest !== undefined && previous !== undefined
@@ -1857,15 +1836,16 @@ function Progress({
       <section className="analytics-hero">
         <div>
           <span className="eyebrow">ROUND TREND</span>
-          <strong>{latest ?? "—"}</strong>
-          <span>
-            {scoreDelta === undefined
-              ? "First round logged"
-              : `${scoreDelta > 0 ? "+" : ""}${scoreDelta} vs previous round`}
-          </span>
+          <strong>{latest !== undefined ? `${latest > 0 ? "+" : ""}${Math.round(latest)}` : "—"}</strong>
+          {latestRound ? <><strong className="round-trend-score">{Math.round(normalizedRoundScore(latestRound, 18))}</strong><span>per 18 holes</span></> : <span>No rounds logged</span>}
         </div>
         <div className="hero-chart">
           <MiniLineChart values={scores} />
+        </div>
+        <div className="analytics-hero-compare">
+          <span className="eyebrow">CHANGE</span>
+          <strong>{scoreDelta === undefined ? "—" : `${scoreDelta > 0 ? "+" : ""}${Math.round(scoreDelta)}`}</strong>
+          <span>{scoreDelta === undefined ? "First round" : "vs previous round"}</span>
         </div>
       </section>
       <section className="panel handicap-panel">
@@ -1878,7 +1858,7 @@ function Progress({
         </div>
         <MiniLineChart values={handicapValues} />
       </section>
-      <ClubFormPanel readings={data.readings} />
+      <ClubFormPanel readings={data.readings} rounds={archived} />
       <section className="legacy-club-control panel">
         <div className="section-heading">
           <div>
@@ -1928,6 +1908,21 @@ function Progress({
           <p>Log range shots to see carry, dispersion, and playable rates.</p>
         )}
       </section>
+      <section className="panel round-progress-panel">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">YOUR GAME</span>
+            <h3>What’s changing across your recent rounds</h3>
+          </div>
+        </div>
+        <div className="round-progress-list">
+          {progressInsights.map((insight) => {
+            const marker = insight.direction === "improving" ? "↑" : insight.direction === "worsening" ? "↓" : insight.direction === "stable" ? "→" : "—";
+            const label = insight.direction === "worsening" ? "Needs attention" : insight.direction === "insufficient-data" ? "Insufficient data" : insight.direction[0].toUpperCase() + insight.direction.slice(1);
+            return <div className="round-progress-item" key={insight.key}><div><strong>{insight.label}</strong><span className={`progress-direction ${insight.direction}`}>{marker} {label}</span></div><small>{insight.evidence}</small></div>;
+          })}
+        </div>
+      </section>
       <section className="panel insights-form-map">
         <div className="section-heading">
           <div>
@@ -1938,17 +1933,19 @@ function Progress({
         </div>
         <div className="form-list">
           {rankedCategoryStats.map((item, index) => (
-            <div className={`form-row ${item.count ? "has-data" : "no-data"}`} key={item.category}>
+              <div className={`form-row ${item.observationCount ? "has-data" : "no-data"}`} key={item.category}>
               <div>
                 <strong>{item.category}</strong>
                 <small>
-                  {item.count
-                    ? `${item.trouble} trouble hole${item.trouble === 1 ? "" : "s"} · ${item.average.toFixed(1)} avg`
-                    : "No data yet"}
+                  {!item.observationCount
+                    ? "No data yet"
+                    : item.troubleCount
+                      ? `${item.troubleCount} trouble hole${item.troubleCount === 1 ? "" : "s"} · ${item.averageTroubleScore > 0 ? "+" : ""}${item.averageTroubleScore.toFixed(1)} avg over par per trouble hole`
+                      : "No problems recorded"}
                 </small>
               </div>
-              {item.count > 0 && index === 0 && <span className="form-leak-label">Biggest leak</span>}
-              {item.count > 0 && index > 0 && <span className="form-rank">#{index + 1}</span>}
+              {item.troubleCount > 0 && index === 0 && <span className="form-leak-label">Biggest leak</span>}
+              {item.troubleCount > 0 && index > 0 && <span className="form-rank">#{index + 1}</span>}
             </div>
           ))}
         </div>
@@ -2047,6 +2044,7 @@ function Progress({
                 <div>
                   <strong>{formatDate(round.date)}</strong>
                   <span>{round.courseName || "Local round"}</span>
+                  <small className="round-length-tag">{round.holes.filter((hole) => hole.score > 0).length || round.holes.length} holes</small>
                 </div>
                 <div className="round-score-summary">
                   <b>{round.totalScore || roundTotal(round)}</b>
@@ -2090,6 +2088,7 @@ function RoundDetail({
   latestHandicap?: number;
 }) {
   const [editing, setEditing] = useState(false);
+  const [selectedHole, setSelectedHole] = useState<number | null>(null);
   const [scores, setScores] = useState(() => round.holes.map((hole) => hole.score));
   const [handicap, setHandicap] = useState<number | "">(roundHandicapIndex(latestHandicap, round.handicapIndex) ?? "");
   const score = round.totalScore || roundTotal(round);
@@ -2128,10 +2127,10 @@ function RoundDetail({
         </div>
         <div>
           <span>Handicap</span>
-          <strong>{round.handicapIndex ?? "—"}</strong>
+          <strong>{round.handicapIndex ?? latestHandicap ?? "—"}</strong>
         </div>
       </section>
-      <button className="text-button" onClick={() => {
+      <button className={editing ? "edit-save-button" : "text-button"} onClick={() => {
         if (editing) {
           const holes = round.holes.map((hole, index) => ({ ...hole, score: Math.max(1, Number(scores[index]) || holePar(hole.holeNumber)) }));
           const edited = { ...round, holes, handicapIndex: handicap === "" ? undefined : Number(handicap), status: "archived" as const };
@@ -2139,7 +2138,7 @@ function RoundDetail({
         }
         setEditing(!editing);
       }}>{editing ? "Save edits" : "Edit Round"}</button>
-      {editing && <div className="panel"><label>Handicap index<input type="number" step="0.1" value={handicap} onChange={(event) => setHandicap(event.target.value === "" ? "" : Number(event.target.value))} /></label>{round.holes.map((hole, index) => <label key={hole.holeNumber}>Hole {hole.holeNumber}<input type="number" min="1" max="15" value={scores[index] || ""} onChange={(event) => setScores((current) => current.map((score, item) => item === index ? Number(event.target.value) : score))} /></label>)}</div>}
+      {editing && <div className="panel round-edit-panel"><strong className="round-edit-heading">{selectedHole ? `Editing hole ${selectedHole}` : "Edit round"}</strong><label className="edit-handicap-field">Handicap index<input type="number" step="0.1" value={handicap} onChange={(event) => setHandicap(event.target.value === "" ? "" : Number(event.target.value))} /></label>{round.holes.map((hole, index) => <label key={hole.holeNumber}>Hole {hole.holeNumber}<input type="number" min="1" max="15" value={scores[index] || ""} onChange={(event) => setScores((current) => current.map((score, item) => item === index ? Number(event.target.value) : score))} /></label>)}</div>}
       {issues.length > 0 && (
         <section className="panel">
           <span className="eyebrow">ROUND FEEDBACK</span>
@@ -2147,12 +2146,12 @@ function RoundDetail({
           <p>{Array.from(new Set(issues)).join(" · ")}</p>
         </section>
       )}
-      <ArchivedScorecard round={round} />
+      <ArchivedScorecard round={round} onHoleTap={(holeNumber) => { setSelectedHole(holeNumber); setEditing(true); }} />
     </div>
   );
 }
 
-function ArchivedScorecard({ round }: { round: AppData["rounds"][number] }) {
+function ArchivedScorecard({ round, onHoleTap }: { round: AppData["rounds"][number]; onHoleTap?: (holeNumber: number) => void }) {
   const orderedHoles = [...round.holes].sort(
     (a, b) => a.holeNumber - b.holeNumber,
   );
@@ -2193,20 +2192,14 @@ function ArchivedScorecard({ round }: { round: AppData["rounds"][number] }) {
               (shot) =>
                 `${shot.phase === "short-game" ? "Short game" : shot.phase[0].toUpperCase() + shot.phase.slice(1)}: ${shot.club} (${shot.outcome === "good" ? "went well" : "needs work"})`,
             );
+          const relative = hole.score - holePar(hole.holeNumber);
+          const scoreClass = relative <= -2 ? "eagle" : relative === -1 ? "birdie" : relative === 0 ? "even" : relative === 1 ? "bogey" : "double-bogey";
           return (
-            <div className="scorecard-row" key={hole.holeNumber}>
+            <div className="scorecard-row" key={hole.holeNumber} role={onHoleTap ? "button" : undefined} tabIndex={onHoleTap ? 0 : undefined} onClick={() => onHoleTap?.(hole.holeNumber)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onHoleTap?.(hole.holeNumber); }}>
               <span className="scorecard-hole">{hole.holeNumber}</span>
               <span>{holePar(hole.holeNumber)}</span>
-              <strong
-                className={
-                  hole.score < holePar(hole.holeNumber)
-                    ? "under"
-                    : hole.score > holePar(hole.holeNumber)
-                      ? "over"
-                      : "even"
-                }
-              >
-                {hole.score}
+              <strong className={`scorecard-score ${scoreClass}`} title={relative < 0 ? (relative === -1 ? "Birdie" : "Eagle or better") : relative > 0 ? (relative === 1 ? "Bogey" : "Double bogey or worse") : "Par"}>
+                <span>{hole.score}</span>
               </strong>
               <div className="scorecard-feedback">
                 {right.length > 0 && (
@@ -2342,6 +2335,7 @@ function RoundSetup({
 
 function RoundMode({
   readings,
+  rounds,
   bag,
   draft,
   setDraft,
@@ -2357,6 +2351,7 @@ function RoundMode({
   weather,
 }: {
   readings: AppData["readings"];
+  rounds: AppData["rounds"];
   bag?: ClubName[];
   draft: AppData["rounds"][number] | null;
   setDraft: (round: AppData["rounds"][number]) => void;
@@ -2373,11 +2368,24 @@ function RoundMode({
   weather?: WeatherContext;
 }) {
   const [activeHole, setActiveHole] = useState(0);
+  const holeStripRef = useRef<HTMLDivElement | null>(null);
+  const holeButtonRefs = useRef<Record<number, HTMLButtonElement | null>>({});
   const [nextShotStatus, setNextShotStatus] = useState("");
   const [teePositionStatus, setTeePositionStatus] = useState("");
   const [showAdaptiveWhy, setShowAdaptiveWhy] = useState(false);
   const latestPosition = useRef<Awaited<ReturnType<typeof getCurrentPosition>> | null>(null);
-  useEffect(() => watchPosition((position) => { latestPosition.current = position; }), []);
+  useEffect(() => {
+    const stop = watchPosition((position) => { latestPosition.current = position; });
+    return stop;
+  }, []);
+  useEffect(() => {
+    if (draft) setActiveHole(Math.max(0, draft.currentHoleIndex || 0));
+  }, [draft?.id]);
+  useEffect(() => {
+    if (!draft) return;
+    const sequence = HERMANUS_LOOPS[draft.loop || "east"].slice(0, draft.roundLength || 9);
+    holeButtonRefs.current[sequence[Math.min(activeHole, sequence.length - 1)]]?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+  }, [activeHole, draft?.loop, draft?.roundLength]);
   if (!draft)
     return (
       <div className="empty-state fade-in">
@@ -2490,7 +2498,19 @@ function RoundMode({
         shotBearingDeg: Math.round(bearingBetween(position, target.position)),
         capturedAt: position.capturedAt,
       };
-      updateHole({ latestShotContext: context });
+      const previousPosition = currentHole.latestShotContext?.position;
+      const travelDistance = previousPosition ? distanceBetweenMeters(previousPosition, position) : 0;
+      const validTravel = previousPosition && travelDistance >= 5 && isValidGolfShotContext(
+        travelDistance,
+        holeDistance(holeNumber, draft.tee || "white"),
+        Math.max(previousPosition.accuracyM || Infinity, position.accuracyM || Infinity),
+      );
+      const shots = currentHole.shots?.map((shot, shotIndex, allShots) =>
+        shotIndex === allShots.length - 1 && validTravel
+          ? { ...shot, actualDistanceM: Math.round(travelDistance) }
+          : shot,
+      );
+      updateHole({ latestShotContext: context, ...(shots ? { shots } : {}) });
       setNextShotStatus("");
     } catch (error) {
       const kind = error instanceof LocationError ? error.kind : "unavailable";
@@ -2623,6 +2643,7 @@ function RoundMode({
           currentHole.latestShotContext.lie,
           holeDistance(holeNumber, draft.tee || "white"),
           currentHole.latestShotContext.position.accuracyM,
+          rounds,
         );
         return adaptive.recommendedClub ? (
           <button type="button" className="adaptive-caddie compact-panel" onClick={() => setShowAdaptiveWhy(!showAdaptiveWhy)}>
@@ -2703,7 +2724,7 @@ function RoundMode({
           defaultClub={currentHole.latestShotContext?.lie ? (() => {
             const wind = calculateShotWind(weather, currentHole.latestShotContext!.shotBearingDeg);
             const adjustment = calculateWindAdjustedDistance(currentHole.latestShotContext!.distanceToTargetM, wind);
-            return adaptiveCaddieDecision(readings, bag, currentHole.latestShotContext!.distanceToTargetM, adjustment?.effectiveDistanceM || currentHole.latestShotContext!.distanceToTargetM, currentHole.latestShotContext!.lie, holeDistance(holeNumber, draft.tee || "white"), currentHole.latestShotContext!.position.accuracyM).recommendedClub;
+            return adaptiveCaddieDecision(readings, bag, currentHole.latestShotContext!.distanceToTargetM, adjustment?.effectiveDistanceM || currentHole.latestShotContext!.distanceToTargetM, currentHole.latestShotContext!.lie, holeDistance(holeNumber, draft.tee || "white"), currentHole.latestShotContext!.position.accuracyM, rounds).recommendedClub;
           })() : undefined}
           putting={currentHole.focusCategory === "Putting"}
           par={holePar(holeNumber)}
@@ -2729,12 +2750,13 @@ function RoundMode({
           {notice}
         </p>
       )}
-      <div className="hole-strip">
+      <div className="hole-strip" ref={holeStripRef}>
         {holes.map((hole, i) => (
           <button
             key={hole}
+            ref={(element) => { holeButtonRefs.current[hole] = element; }}
             className={i === index ? "active" : ""}
-            onClick={() => setActiveHole(i)}
+            onClick={() => { setActiveHole(i); setDraft({ ...draft, currentHoleIndex: i }); }}
           >
             {hole}
           </button>
