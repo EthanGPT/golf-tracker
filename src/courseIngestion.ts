@@ -44,7 +44,9 @@ export type ExternalGeometryFeature = {
     | "water_hazard"
     | "lateral_water_hazard"
     | "out_of_bounds"
-    | "pin";
+    | "pin"
+    | "target"
+    | "centreline";
   ref?: string;
   par?: number;
   tee?: string;
@@ -175,7 +177,11 @@ export function parseKmlPlacemarks(
     const hole = name.match(/(?:hole|h)\s*#?\s*(\d{1,2})/i)?.[1] || name.match(/\b(\d{1,2})\b/)?.[1];
     const number = hole ? Number(hole) : undefined;
     const lower = name.toLowerCase();
-    const kind: ExternalGeometryFeature["kind"] = lower.includes("green") || lower.includes("pin")
+    const kind: ExternalGeometryFeature["kind"] = lower.includes("center line") || lower.includes("centre line")
+      ? "centreline"
+      : lower.includes("target")
+        ? "target"
+        : lower.includes("green") || lower.includes("pin")
       ? "green"
       : lower.includes("tee")
         ? "tee"
@@ -188,6 +194,7 @@ export function parseKmlPlacemarks(
       id: `kml/${features.length}`,
       kind,
       ref: number ? String(number) : undefined,
+      tee: kind === "tee" ? "white" : undefined,
       points: coordinates,
       provenance: {
         source: "provisualizer-kml",
@@ -452,6 +459,18 @@ export function normalizeCourse(
         distanceM: hole.distancesM?.[feature.tee!] || 0,
         position: polygonCentre(feature.points),
       }));
+    const centreline = features.find((feature) => feature.kind === "centreline")?.points;
+    const targets = features
+      .filter((feature) => feature.kind === "target")
+      .map((feature, index) => ({
+        id: feature.id,
+        name: `Route target ${index + 1}`,
+        position: polygonCentre(feature.points)!,
+        kind: "fairway" as const,
+        source: feature.provenance.source,
+        verified: false,
+      }))
+      .filter((target) => target.position);
     const hazards: HazardDefinition[] = features.flatMap((feature) => {
       const type = hazardType(feature.kind);
       return type
@@ -482,6 +501,8 @@ export function normalizeCourse(
           }
         : undefined,
       hazards,
+      centreline,
+      targets,
     };
   });
   const provenance = resolved.features.map((feature) => feature.provenance);

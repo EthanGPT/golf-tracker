@@ -2685,6 +2685,9 @@ select:focus {
 .caddie-reasons b.warning { color: #a6604c; }
 .caddie-then { margin-top: 4px; }
 .caddie-conditions { display: grid; gap: 4px; margin-top: 4px; }
+.caddie-refine-action { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.caddie-refine-action .text-button { min-height: 30px; padding: 0 8px; font-size: 11px; }
+.caddie-refine-action small { color: var(--muted); font-size: 10px; }
 .distance-card > b {
   color: var(--forest);
   font-size: 25px;

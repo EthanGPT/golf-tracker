@@ -1,5 +1,6 @@
 import { mergeImportedGeometry, readCachedCourse } from "./courseIngestion";
 import { HERMANUS_IMPORTED_GEOMETRY } from "./hermanusImportedGeometry";
+import { HERMANUS_PROVISUALIZER_GEOMETRY } from "./hermanusProVisualizerGeometry";
 
 export type CourseLoop = "east" | "north" | "south";
 export type RoundLength = 9 | 18 | 27;
@@ -241,6 +242,18 @@ export function getRuntimeCourse(courseId: string): CourseDefinition | undefined
         holes: course.holes.map((hole) => ({
           ...hole,
           green: hole.green || HERMANUS_IMPORTED_GEOMETRY[hole.number],
+          centreline: hole.centreline || HERMANUS_PROVISUALIZER_GEOMETRY[hole.number]?.centreline,
+          targets: hole.targets || HERMANUS_PROVISUALIZER_GEOMETRY[hole.number]?.targets.map((position, index) => ({
+            id: `provisualizer-target-${hole.number}-${index + 1}`,
+            name: `Route target ${index + 1}`,
+            position,
+            kind: "fairway" as const,
+            source: HERMANUS_PROVISUALIZER_GEOMETRY[hole.number].source,
+            verified: false,
+          })),
+          teeBoxes: hole.teeBoxes.map((tee) => tee.teeId === "white"
+            ? { ...tee, position: tee.position || HERMANUS_PROVISUALIZER_GEOMETRY[hole.number]?.tee }
+            : tee),
         })),
       }
     : course;
@@ -294,6 +307,21 @@ export function getHoleTarget(courseId: string, holeNumber: number) {
   return undefined;
 }
 
+export function getHoleTeeOrigin(courseId: string, holeNumber: number, teeId = "white") {
+  return getRuntimeCourseHole(courseId, holeNumber)?.teeBoxes.find((tee) => tee.teeId === teeId)?.position;
+}
+
+export function getTeeTarget(courseId: string, holeNumber: number, teeId = "white") {
+  const hole = getRuntimeCourseHole(courseId, holeNumber);
+  const teeOrigin = getHoleTeeOrigin(courseId, holeNumber, teeId);
+  if (!hole || !teeOrigin) return undefined;
+  const selected = selectTeeTarget({ hole, teeCoordinate: teeOrigin });
+  if (selected) return { position: selected.targetCoordinate, targetType: "target" as const, name: selected.targetName };
+  return hole.green?.centre
+    ? { position: hole.green.centre, targetType: "green-centre" as const, name: "Green centre" }
+    : undefined;
+}
+
 export type TeeTargetSelection = {
   targetCoordinate: LatLng;
   targetName: string;
@@ -311,6 +339,18 @@ export type TeeLandingCandidate = {
   hazardClearanceM: number;
   routeFraction: number;
 };
+
+export function selectReachableTeeLandingCandidate(
+  candidates: TeeLandingCandidate[],
+  clubCarryM: number,
+  effectiveDistance: (candidate: TeeLandingCandidate) => number,
+  toleranceM = 15,
+) {
+  return candidates
+    .map((candidate) => ({ candidate, effectiveDistanceM: effectiveDistance(candidate) }))
+    .filter(({ effectiveDistanceM }) => Math.abs(clubCarryM - effectiveDistanceM) <= toleranceM)
+    .sort((a, b) => b.candidate.distanceFromTeeM - a.candidate.distanceFromTeeM)[0];
+}
 
 const bearingDegrees = (from: LatLng, to: LatLng) => {
   const radians = (value: number) => (value * Math.PI) / 180;
@@ -388,7 +428,9 @@ export function selectTeeTarget(input: {
   teeCoordinate?: LatLng;
 }): TeeTargetSelection | undefined {
   if (!input.teeCoordinate) return undefined;
-  const explicit = input.hole.targets?.find((target) => target.verified && target.kind !== "green");
+  const explicit = input.hole.targets?.find((target) =>
+    (target.verified || target.source === "provisualizer-kml") && target.kind !== "green",
+  );
   if (explicit)
     return {
       targetCoordinate: explicit.position,

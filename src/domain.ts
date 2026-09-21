@@ -316,6 +316,25 @@ export function clubSummary(readings: RangeReading[], club: ClubName) {
   };
 }
 
+/** Fits a wind-adjusted target to the golfer's observed usable carry. */
+export function isTeeTargetReachable(
+  readings: RangeReading[],
+  club: ClubName,
+  playingDistanceM: number,
+  fallbackToleranceM = 15,
+) {
+  const summary = clubSummary(readings, club);
+  if (
+    summary.usableCount >= 3 &&
+    summary.min !== undefined &&
+    summary.max !== undefined
+  ) {
+    const edgeAllowance = 3;
+    return playingDistanceM >= summary.min - edgeAllowance && playingDistanceM <= summary.max + edgeAllowance;
+  }
+  return summary.typical !== undefined && Math.abs(summary.typical - playingDistanceM) <= fallbackToleranceM;
+}
+
 export function clubDisplayLabel(club: string) {
   return club === "4W-Hybrid" ? "4H" : club;
 }
@@ -489,6 +508,13 @@ export function caddieDecision(
       value: `${summary.typical}m`,
       tone: "neutral",
     });
+    if (summary.usableCount >= 3 && summary.min !== undefined && summary.max !== undefined)
+      reasons.push({
+        key: "primary-range",
+        label: "Observed carry",
+        value: `${summary.min}–${summary.max}m observed`,
+        tone: "neutral",
+      });
     if (summary.playablePercentage !== undefined)
       reasons.push({
         key: "primary-playable",

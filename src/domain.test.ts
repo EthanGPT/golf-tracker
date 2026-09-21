@@ -5,6 +5,7 @@ import {
   SEED_READINGS,
   categoryCounts,
   clubSummary,
+  isTeeTargetReachable,
   caddiePlan,
   caddieDecision,
   adaptiveCaddieDecision,
@@ -34,6 +35,31 @@ describe("distance calculations", () => {
     ];
     expect(clubSummary(readings, "6i").typical).toBe(150);
     expect(clubSummary(readings, "6i").max).toBe(160);
+  });
+
+  it("fits tee targets to observed usable carry ranges", () => {
+    const readings = [142, 148, 160].map((distanceMetres, index) => ({
+      id: `range-${index}`,
+      club: "6i" as const,
+      distanceMetres,
+      mishit: false,
+      sessionDate: "2026-09-14",
+      createdAt: `2026-09-1${index + 1}`,
+      severeMiss: false,
+    }));
+    expect(isTeeTargetReachable(readings, "6i", 156)).toBe(true);
+    expect(isTeeTargetReachable(readings, "6i", 168)).toBe(false);
+    expect(isTeeTargetReachable(readings, "6i", 248)).toBe(false);
+    expect(isTeeTargetReachable(readings.slice(0, 2), "6i", 160)).toBe(true);
+  });
+
+  it("does not let severe-miss distances expand tee carry fit", () => {
+    const readings = [
+      ...[142, 148, 150].map((distanceMetres, index) => ({ id: `good-${index}`, club: "6i" as const, distanceMetres, mishit: false, sessionDate: "2026-09-14", createdAt: `2026-09-1${index + 1}`, severeMiss: false })),
+      { id: "severe", club: "6i" as const, distanceMetres: 220, mishit: false, sessionDate: "2026-09-14", createdAt: "2026-09-20", severeMiss: true },
+    ];
+    expect(clubSummary(readings, "6i").max).toBe(150);
+    expect(isTeeTargetReachable(readings, "6i", 200)).toBe(false);
   });
 
   it("explains the existing caddie plan from stored club metrics", () => {

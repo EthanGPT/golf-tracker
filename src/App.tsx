@@ -18,6 +18,7 @@ import {
   CLUBS,
   DISTANCE_CLUBS,
   caddiePlan,
+  isTeeTargetReachable,
   caddieDecision,
   adaptiveCaddieDecision,
   clubSummary,
@@ -65,6 +66,10 @@ import {
   HERMANUS_HOLE_DIAGRAMS,
   HERMANUS_LOOPS,
   getCourse,
+  generateTeeLandingCandidates,
+  selectReachableTeeLandingCandidate,
+  getHoleTeeOrigin,
+  getTeeTarget,
   getHoleTarget,
   holeDistance,
   holePar,
@@ -2322,6 +2327,7 @@ function RoundMode({
   const [activeHole, setActiveHole] = useState(0);
   const [courseOpen, setCourseOpen] = useState(false);
   const [nextShotStatus, setNextShotStatus] = useState("");
+  const [teePositionStatus, setTeePositionStatus] = useState("");
   const [showAdaptiveWhy, setShowAdaptiveWhy] = useState(false);
   if (!draft)
     return (
@@ -2356,14 +2362,50 @@ function RoundMode({
     draft.holes.find((hole) => hole.holeNumber === holeNumber) ||
     emptyHole(holeNumber);
   const completed = draft.holes.length;
-  const teeTarget = holePar(holeNumber) === 3
-    ? getHoleTarget(draft.courseId || "hermanus-golf-club", holeNumber)
-    : undefined;
-  const teeWind = currentHole.teeOrigin && teeTarget && weather
-    ? calculateShotWind(weather, bearingBetween(currentHole.teeOrigin, teeTarget.position))
+  const courseId = draft.courseId || "hermanus-golf-club";
+  const importedTeeOrigin = getHoleTeeOrigin(courseId, holeNumber, draft.tee || "white");
+  const teeOrigin = currentHole.teeOrigin || importedTeeOrigin;
+  const teePlan = caddiePlan(readings, holePar(holeNumber), holeDistance(holeNumber, draft.tee || "white"));
+  const courseHole = getCourse(courseId)?.holes.find((hole) => hole.number === holeNumber);
+  const teeTarget = (() => {
+    if (!teeOrigin || !courseHole) return getTeeTarget(courseId, holeNumber, draft.tee || "white");
+    if (holePar(holeNumber) === 3) return getTeeTarget(courseId, holeNumber, draft.tee || "white");
+    const candidates = generateTeeLandingCandidates({
+      teeOrigin,
+      centreline: courseHole.centreline,
+      hazards: courseHole.hazards,
+      greenCentre: courseHole.green?.centre,
+      maxDistanceM: (teePlan?.tee.carry || 0) + 30,
+    });
+    const carry = teePlan?.tee.carry;
+    if (!carry || !candidates.length) return undefined;
+    const effectiveDistance = (candidate: (typeof candidates)[number]) => {
+      const wind = weather ? calculateShotWind(weather, candidate.bearingDeg) : undefined;
+      return calculateWindAdjustedDistance(candidate.distanceFromTeeM, wind)?.effectiveDistanceM || candidate.distanceFromTeeM;
+    };
+    const fitCandidates = candidates.filter((candidate) =>
+      isTeeTargetReachable(readings, teePlan!.tee.club, effectiveDistance(candidate)),
+    );
+    const selected = selectReachableTeeLandingCandidate(
+      fitCandidates,
+      carry,
+      effectiveDistance,
+      Number.POSITIVE_INFINITY,
+    );
+    const reachable = selected;
+    return reachable
+      ? {
+          position: reachable.candidate.position,
+          targetType: "target" as const,
+          name: "Fairway target",
+        }
+      : undefined;
+  })();
+  const teeWind = teeOrigin && teeTarget && weather
+    ? calculateShotWind(weather, bearingBetween(teeOrigin, teeTarget.position))
     : undefined;
   const teeAdjustment = teeWind && teeTarget
-    ? calculateWindAdjustedDistance(distanceBetweenMeters(currentHole.teeOrigin!, teeTarget.position), teeWind)
+    ? calculateWindAdjustedDistance(distanceBetweenMeters(teeOrigin!, teeTarget.position), teeWind)
     : undefined;
   const updateHole = (patch: Partial<typeof currentHole>) =>
     setDraft({
@@ -2406,8 +2448,8 @@ function RoundMode({
         kind === "denied"
           ? "Location permission needed"
           : kind === "timeout"
-            ? "Location timed out. Try again."
-            : "Location unavailable",
+            ? "Couldn’t get location. Try again."
+            : "Couldn’t get location. Try again.",
       );
     }
   };
@@ -2442,11 +2484,14 @@ function RoundMode({
           readings={readings}
           par={holePar(holeNumber)}
           distance={holeDistance(holeNumber, draft.tee || "white")}
-          weather={weather}
-          teeOrigin={currentHole.teeOrigin}
+          teeOrigin={teeOrigin}
           teeWind={teeWind}
           teePlayingDistance={teeAdjustment?.effectiveDistanceM}
+          teeTargetName={teeTarget?.name}
+          teeTargetDistance={teeTarget ? Math.round(distanceBetweenMeters(teeOrigin!, teeTarget.position)) : undefined}
+          teePositionStatus={teePositionStatus}
           onCaptureTeeOrigin={async () => {
+            setTeePositionStatus("Getting tee position…");
             try {
               const position = await getCurrentPosition();
               updateHole({
@@ -2459,10 +2504,11 @@ function RoundMode({
                 },
                 teeOriginObservations: position.accuracyM !== undefined && position.accuracyM <= TEE_ORIGIN_ACCURACY.usableM
                   ? [...(currentHole.teeOriginObservations || []), { courseId: draft.courseId || "hermanus-golf-club", holeNumber, tee: draft.tee || "white", latitude: position.latitude, longitude: position.longitude, accuracyM: position.accuracyM, capturedAt: position.capturedAt, source: "live-gps" }]
-                  : currentHole.teeOriginObservations,
+                : currentHole.teeOriginObservations,
               });
+              setTeePositionStatus("Tee position refined");
             } catch {
-              // Tee Caddie remains usable without directional context.
+              setTeePositionStatus("Couldn’t refine tee position. Using mapped tee.");
             }
           }}
         />
@@ -2664,24 +2710,28 @@ function Caddie({
   readings,
   par,
   distance,
-  weather,
   teeOrigin,
   teeWind,
   teePlayingDistance,
+  teeTargetName,
+  teeTargetDistance,
+  teePositionStatus,
   onCaptureTeeOrigin,
 }: {
   readings: AppData["readings"];
   par: number;
   distance: number;
-  weather?: WeatherContext;
   teeOrigin?: { latitude: number; longitude: number; accuracyM?: number };
   teeWind?: ReturnType<typeof calculateShotWind>;
   teePlayingDistance?: number;
+  teeTargetName?: string;
+  teeTargetDistance?: number;
+  teePositionStatus?: string;
   onCaptureTeeOrigin?: () => Promise<void>;
 }) {
   const [showDecision, setShowDecision] = useState(false);
   const plan = caddiePlan(readings, par, teePlayingDistance || distance);
-  const decision = caddieDecision(readings, par, distance);
+  const decision = caddieDecision(readings, par, teePlayingDistance || distance);
   if (!plan) return null;
   return (
     <section
@@ -2694,23 +2744,8 @@ function Caddie({
       <span className="caddie-title">TEE CADDIE</span>
       <span className="eyebrow">BEST TEE CLUB</span>
       <b>{clubDisplayLabel(plan.tee.club)}</b>
-      {!teeOrigin && onCaptureTeeOrigin && (
-        <button type="button" className="text-button tee-position-button" onClick={(event) => { event.stopPropagation(); void onCaptureTeeOrigin(); }}>
-          Use my position
-        </button>
-      )}
       {teeOrigin && teeWind && teeWind.label && (
         <small className="caddie-weather">{teeWind.label}</small>
-      )}
-      {weather && (
-        <small className="caddie-weather">
-          {weather.windDirectionLabel && weather.windSpeedKmh !== undefined
-            ? `${weather.windDirectionLabel} ${Math.round(weather.windSpeedKmh)} km/h`
-            : "Wind unavailable"}
-          {weather.temperatureC !== undefined
-            ? ` · ${Math.round(weather.temperatureC)}°C`
-            : ""}
-        </small>
       )}
       {showDecision && decision && (
         <div
@@ -2753,31 +2788,46 @@ function Caddie({
                 .filter((reason) =>
                   [
                     "primary-carry",
+                    "primary-range",
                     "primary-playable",
                     "primary-severe",
                   ].includes(reason.key),
                 )
                 .map((reason) =>
-                  reason.key === "primary-carry"
-                    ? `${reason.value} carry`
-                    : reason.key === "primary-playable"
+                    reason.key === "primary-carry"
+                      ? `${reason.value} carry`
+                      : reason.key === "primary-range"
+                        ? reason.value
+                      : reason.key === "primary-playable"
                       ? `${reason.value} playable`
                       : `${reason.value} severe`,
                 )
                 .join(" · ")}
             </p>
-            {weather && (
+            {teeTargetName && teeTargetDistance !== undefined && (
               <div className="caddie-conditions">
-                <span className="eyebrow">CONDITIONS</span>
-                <b>
-                  {weather.windDirectionLabel &&
-                  weather.windSpeedKmh !== undefined
-                    ? `${weather.windDirectionLabel} ${Math.round(weather.windSpeedKmh)} km/h`
-                    : "Weather unavailable"}
-                  {weather.temperatureC !== undefined
-                    ? ` · ${Math.round(weather.temperatureC)}°C`
-                    : ""}
-                </b>
+                <span className="eyebrow">TARGET</span>
+                <b>{teeTargetName} · {teeTargetDistance}m</b>
+              </div>
+            )}
+            {teePlayingDistance !== undefined && (
+              <div className="caddie-conditions">
+                <span className="eyebrow">PLAYS</span>
+                <b>~{Math.round(teePlayingDistance)}m</b>
+              </div>
+            )}
+            {teeWind?.label && (
+              <div className="caddie-conditions">
+                <span className="eyebrow">WIND</span>
+                <b>{teeWind.label}</b>
+              </div>
+            )}
+            {onCaptureTeeOrigin && (
+              <div className="caddie-refine-action">
+                <button type="button" className="text-button" onClick={(event) => { event.stopPropagation(); void onCaptureTeeOrigin(); }}>
+                  Refine tee position with GPS
+                </button>
+                {teePositionStatus && <small>{teePositionStatus}</small>}
               </div>
             )}
           </div>
@@ -2797,6 +2847,12 @@ function ShotGroups({
   setShots: (shots: HoleShot[]) => void;
 }) {
   const [activePhase, setActivePhase] = useState<ShotPhase | null>(null);
+  const activeGroupRef = useRef<HTMLDivElement | null>(null);
+  const refocusSelector = () => {
+    window.setTimeout(() => {
+      activeGroupRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 0);
+  };
   const outcomeOptions: Record<ShotPhase, { good: string[]; bad: string[] }> = {
     tee: {
       good: ["Fairway found", "Good contact", "Good distance", "Good decision"],
@@ -2892,6 +2948,7 @@ function ShotGroups({
   ];
   const toggle = (phase: ShotPhase, club: string) => {
     setActivePhase(phase);
+    refocusSelector();
     const existing = shots.find((shot) => shot.phase === phase);
     if (existing?.club === club)
       return setShots(shots.filter((shot) => shot.id !== existing.id));
@@ -2905,6 +2962,7 @@ function ShotGroups({
     outcome: "good" | "bad",
     note: string,
   ) => {
+    refocusSelector();
     setShots(
       shots.map((shot) => {
         if (shot.phase !== phase) return shot;
@@ -2938,13 +2996,14 @@ function ShotGroups({
       {groups.map((group) => {
         const shot = shots.find((item) => item.phase === group.phase);
         return (
-          <div className="shot-group" key={group.phase}>
+          <div className="shot-group" key={group.phase} ref={activePhase === group.phase ? activeGroupRef : undefined}>
             <button
               type="button"
               className={`shot-group-heading ${activePhase === group.phase ? "open" : ""}`}
-              onClick={() =>
-                setActivePhase(activePhase === group.phase ? null : group.phase)
-              }
+              onClick={() => {
+                setActivePhase(activePhase === group.phase ? null : group.phase);
+                refocusSelector();
+              }}
             >
               <strong>{group.label}</strong>
               {shot && <span>{shot.club}</span>}

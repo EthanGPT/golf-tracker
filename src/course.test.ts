@@ -14,6 +14,7 @@ import {
   getHoleTarget,
   generateTeeLandingCandidates,
   selectTeeTarget,
+  selectReachableTeeLandingCandidate,
   validateCourseGeometry,
 } from "./course";
 import { cacheCourse } from "./courseIngestion";
@@ -97,6 +98,20 @@ describe("course registry", () => {
     expect(candidates.every((candidate) => candidate.bearingDeg >= 0 && candidate.bearingDeg <= 360)).toBe(true);
   });
 
+  it("never pairs a 145m club with a 248m playing target", () => {
+    const candidates = [
+      { id: "near", position: { latitude: 0, longitude: 0 }, distanceFromTeeM: 137, bearingDeg: 90, hazardClearanceM: 100, routeFraction: 0.4 },
+      { id: "far", position: { latitude: 0, longitude: 0.002 }, distanceFromTeeM: 233, bearingDeg: 90, hazardClearanceM: 100, routeFraction: 0.8 },
+    ];
+    const selected = selectReachableTeeLandingCandidate(
+      candidates,
+      145,
+      (candidate) => candidate.id === "near" ? 145 : 248,
+    );
+    expect(selected?.candidate.id).toBe("near");
+    expect(Math.abs(145 - (selected?.effectiveDistanceM || 0))).toBeLessThanOrEqual(15);
+  });
+
   it("keeps verified static geometry separate from bundled runtime geometry", () => {
     expect(validateCourseGeometry(HERMANUS_COURSE)).toEqual({
       mappedGreenCentres: 0,
@@ -137,5 +152,19 @@ describe("course registry", () => {
     });
     expect(HERMANUS_COURSE.holes[0].green).toBeUndefined();
     (globalThis as { localStorage?: unknown }).localStorage = previousStorage;
+  });
+
+  it("exposes the imported ProVisualizer tee and route geometry for all 27 holes", () => {
+    const runtime = getCourse("hermanus-golf-club");
+    expect(runtime?.holes).toHaveLength(27);
+    expect(runtime?.holes.every((hole) => {
+      const white = hole.teeBoxes.find((tee) => tee.teeId === "white");
+      return Boolean(white?.position && hole.centreline && hole.centreline.length >= 2);
+    })).toBe(true);
+    expect(runtime?.holes.every((hole) => hole.green?.centre)).toBe(true);
+    expect(new Set(runtime!.holes.map((hole) => {
+      const tee = hole.teeBoxes.find((candidate) => candidate.teeId === "white")!.position!;
+      return `${tee.latitude},${tee.longitude}`;
+    })).size).toBe(27);
   });
 });
