@@ -29,7 +29,7 @@ export type RoundTag = {
   outcome: string;
   type: "went-right" | "went-wrong";
 };
-export type ShotPhase = "tee" | "approach" | "short-game" | "putting";
+export type ShotPhase = "tee" | "approach" | "short-game" | "recovery" | "putting";
 export type AdaptiveCaddieStatus =
   | "recommended"
   | "insufficient-data"
@@ -111,6 +111,7 @@ export type RoundHole = {
   holeNumber: number;
   score: number;
   focusCategory: FocusCategory;
+  onGreen?: boolean;
   wentRight: string;
   wentWrong: string;
   tags?: RoundTag[];
@@ -129,6 +130,21 @@ export type RoundHole = {
   teeOrigin?: TeeOrigin;
   teeOriginObservations?: TeeOriginObservation[];
 };
+
+export function ensurePuttingShot(shots: HoleShot[]) {
+  const normalized = shots.map((shot) => shot.phase === "putting" && shot.club !== "Putter" ? { ...shot, club: "Putter" } : shot);
+  return normalized.some((shot) => shot.phase === "putting")
+    ? normalized
+    : [...normalized, { id: crypto.randomUUID(), phase: "putting" as const, club: "Putter" }];
+}
+
+export function appendHoleShot(shots: HoleShot[], phase: ShotPhase, club?: ClubName) {
+  return [...shots, { id: crypto.randomUUID(), phase, club }];
+}
+
+export function updateHoleShot(shots: HoleShot[], shotId: string, update: Partial<HoleShot>) {
+  return shots.map((shot) => shot.id === shotId ? { ...shot, ...update } : shot);
+}
 export type ShotLie = "tee" | "fairway" | "rough" | "bunker" | "recovery";
 
 export type ShotContext = {
@@ -206,6 +222,10 @@ export function roundHandicapIndex(latestHandicap: number | undefined, storedHan
   return storedHandicap ?? latestHandicap;
 }
 
+export function currentHandicapIndex(history: AppData["handicapHistory"]) {
+  return history.slice().sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id)).at(-1)?.index;
+}
+
 export function normalizedRoundScore(round: Round, targetHoles = 9) {
   const playedHoles = round.holes.filter((hole) => hole.score > 0).length || round.holes.length;
   const score = round.totalScore || roundTotal(round);
@@ -255,7 +275,7 @@ export function getOnCourseClubAdjustment(rounds: Round[], club: ClubName, basel
 
 export function formMapCategoryStats(rounds: Round[], parForHole: (holeNumber: number) => number = () => 0) {
   const categories: FocusCategory[] = ["Tee shot", "Approach", "Short game", "Putting"];
-  const phaseCategory: Record<ShotPhase, FocusCategory> = { tee: "Tee shot", approach: "Approach", "short-game": "Short game", putting: "Putting" };
+  const phaseCategory: Record<ShotPhase, FocusCategory> = { tee: "Tee shot", approach: "Approach", "short-game": "Short game", recovery: "Course management", putting: "Putting" };
   const tagCategory: Record<RoundCategory, FocusCategory> = { drive: "Tee shot", wood: "Tee shot", iron: "Approach", chip: "Short game", putt: "Putting" };
   const holes = rounds.filter((round) => round.status === "archived").flatMap((round) => round.holes);
   return categories.map((category) => {
@@ -271,6 +291,56 @@ export function formMapCategoryStats(rounds: Round[], parForHole: (holeNumber: n
       return relevantTagTrouble || relevantShotTrouble || focusTrouble;
     });
     return { category, observationCount: observations.length, troubleCount: trouble.length, averageTroubleScore: trouble.length ? trouble.reduce((sum, hole) => sum + (hole.score - parForHole(hole.holeNumber)), 0) / trouble.length : 0 };
+  });
+}
+
+export function roundTroubleByCategory(round: Round) {
+  const categories: FocusCategory[] = ["Tee shot", "Approach", "Short game", "Putting"];
+  const phaseCategory: Record<ShotPhase, FocusCategory> = { tee: "Tee shot", approach: "Approach", "short-game": "Short game", recovery: "Course management", putting: "Putting" };
+  const tagCategory: Record<RoundCategory, FocusCategory> = { drive: "Tee shot", wood: "Tee shot", iron: "Approach", chip: "Short game", putt: "Putting" };
+  return Object.fromEntries(categories.map((category) => [category, round.holes.filter((hole) => {
+    const badShot = (hole.shots || []).some((shot) => phaseCategory[shot.phase] === category && (shot.outcome === "bad" || (shot.outcomes || []).some((outcome) => outcome.outcome === "bad")));
+    const badTag = (hole.tags || []).some((tag) => tag.type === "went-wrong" && tagCategory[tag.category] === category);
+    return badShot || badTag || (hole.focusCategory === category && Boolean(hole.wentWrong.trim()));
+  }).length])) as Record<FocusCategory, number>;
+}
+
+export function roundTroubleHolesByCategory(round: Round) {
+  const categories: FocusCategory[] = ["Tee shot", "Approach", "Short game", "Putting"];
+  const phaseCategory: Record<ShotPhase, FocusCategory> = { tee: "Tee shot", approach: "Approach", "short-game": "Short game", recovery: "Course management", putting: "Putting" };
+  const tagCategory: Record<RoundCategory, FocusCategory> = { drive: "Tee shot", wood: "Tee shot", iron: "Approach", chip: "Short game", putt: "Putting" };
+  return Object.fromEntries(categories.map((category) => [category, round.holes.filter((hole) => {
+    const badShot = (hole.shots || []).some((shot) => phaseCategory[shot.phase] === category && (shot.outcome === "bad" || (shot.outcomes || []).some((outcome) => outcome.outcome === "bad")));
+    const badTag = (hole.tags || []).some((tag) => tag.type === "went-wrong" && tagCategory[tag.category] === category);
+    return badShot || badTag || (hole.focusCategory === category && Boolean(hole.wentWrong.trim()));
+  }).map((hole) => hole.holeNumber)])) as Record<FocusCategory, number[]>;
+}
+
+export function roundTroubleDetailsByCategory(round: Round) {
+  const categories: FocusCategory[] = ["Tee shot", "Approach", "Short game", "Putting"];
+  const phaseCategory: Record<ShotPhase, FocusCategory> = { tee: "Tee shot", approach: "Approach", "short-game": "Short game", recovery: "Course management", putting: "Putting" };
+  const tagCategory: Record<RoundCategory, FocusCategory> = { drive: "Tee shot", wood: "Tee shot", iron: "Approach", chip: "Short game", putt: "Putting" };
+  return Object.fromEntries(categories.map((category) => [category, round.holes.flatMap((hole) => {
+    const details = [
+      ...(hole.shots || []).filter((shot) => phaseCategory[shot.phase] === category && (shot.outcome === "bad" || (shot.outcomes || []).some((outcome) => outcome.outcome === "bad"))).flatMap((shot) => shot.outcomes?.filter((outcome) => outcome.outcome === "bad").map((outcome) => outcome.note) || (shot.note ? [shot.note] : [])),
+      ...(hole.tags || []).filter((tag) => tag.type === "went-wrong" && tagCategory[tag.category] === category).map((tag) => tag.outcome),
+      ...(hole.focusCategory === category && hole.wentWrong.trim() ? [hole.wentWrong.trim()] : []),
+    ];
+    return details.length ? [{ holeNumber: hole.holeNumber, detail: [...new Set(details)].join(", ") }] : [];
+  })])) as Record<FocusCategory, { holeNumber: number; detail: string }[]>;
+}
+
+export function recentCategoryTroubleStats(rounds: Round[], parForHole: (holeNumber: number) => number = () => 0) {
+  const categories: FocusCategory[] = ["Tee shot", "Approach", "Short game", "Putting"];
+  const recent = rounds.filter((round) => round.status === "archived").sort((a, b) => a.date.localeCompare(b.date)).slice(-6);
+  return categories.map((category) => {
+    const playedHoles = recent.flatMap((round) => round.holes.filter((hole) => hole.score > 0));
+    const categoryTroubleHoles = recent.flatMap((round) => {
+      const issueNumbers = new Set(roundTroubleDetailsByCategory(round)[category].map((item) => item.holeNumber));
+      return round.holes.filter((hole) => hole.score > 0 && issueNumbers.has(hole.holeNumber));
+    });
+    const avg = categoryTroubleHoles.length ? categoryTroubleHoles.reduce((sum, hole) => sum + hole.score - parForHole(hole.holeNumber), 0) / categoryTroubleHoles.length : 0;
+    return { category, troubleRate: playedHoles.length ? (categoryTroubleHoles.length / playedHoles.length) * 100 : 0, averageWhenItHappens: avg, observationCount: playedHoles.length };
   });
 }
 
@@ -296,7 +366,7 @@ export type RoundProgressInsight = {
 };
 
 function holeCategoryEvidence(hole: RoundHole, category: FocusCategory) {
-  const phaseCategory: Record<ShotPhase, FocusCategory> = { tee: "Tee shot", approach: "Approach", "short-game": "Short game", putting: "Putting" };
+  const phaseCategory: Record<ShotPhase, FocusCategory> = { tee: "Tee shot", approach: "Approach", "short-game": "Short game", recovery: "Course management", putting: "Putting" };
   const tagCategory: Record<RoundCategory, FocusCategory> = { drive: "Tee shot", wood: "Tee shot", iron: "Approach", chip: "Short game", putt: "Putting" };
   const relevantShots = (hole.shots || []).filter((shot) => phaseCategory[shot.phase] === category);
   const relevantTags = (hole.tags || []).filter((tag) => tagCategory[tag.category] === category);
@@ -347,13 +417,14 @@ export type PracticePriority = {
   evidence: string;
   drill: string;
   clubGroup: "Driver/Woods" | "Irons" | "Wedges" | "Putter" | "Club not recorded";
-  phaseLabel: "Off the tee" | "Approach" | "Short game" | "Putting";
+  phaseLabel: "Off the tee" | "Approach" | "Short game" | "Recovery" | "Putting";
 };
 
 function clubGroupForPractice(club: ClubName | undefined, phase: ShotPhase) {
   if (!club && phase === "tee") return "Driver/Woods" as const;
   if (!club && phase === "approach") return "Irons" as const;
   if (!club && phase === "short-game") return "Wedges" as const;
+  if (!club && phase === "recovery") return "Club not recorded" as const;
   if (!club && phase === "putting") return "Putter" as const;
   if (club === "Putter" || phase === "putting") return "Putter" as const;
   if (club === "PW" || club === "SW" || phase === "short-game") return "Wedges" as const;
@@ -362,7 +433,7 @@ function clubGroupForPractice(club: ClubName | undefined, phase: ShotPhase) {
 }
 
 function phaseLabelForPractice(phase: ShotPhase) {
-  return ({ tee: "Off the tee", approach: "Approach", "short-game": "Short game", putting: "Putting" } as const)[phase];
+  return ({ tee: "Off the tee", approach: "Approach", "short-game": "Short game", recovery: "Recovery", putting: "Putting" } as const)[phase];
 }
 export function issueLabel(
   category: RoundCategory | ShotPhase,
@@ -731,6 +802,17 @@ export function caddieDecision(
   };
 }
 
+export function resolveTeeDecision(readings: RangeReading[], par: number, targetDistance: number) {
+  const plan = caddiePlan(readings, par, targetDistance);
+  if (!plan) return undefined;
+  const explanation = caddieDecision(readings, par, targetDistance);
+  return {
+    club: par === 3 ? explanation?.primaryClub || plan.sequence[0]?.club || plan.tee.club : plan.tee.club,
+    plan,
+    explanation,
+  };
+}
+
 export const ADAPTIVE_CADDIE_V1 = {
   distanceFitWeight: 0.5,
   playableWeight: 0.25,
@@ -752,6 +834,24 @@ function lieSuitability(club: ClubName, lie: ShotLie) {
   const values = ADAPTIVE_CADDIE_V1.lieSuitability[lie as keyof typeof ADAPTIVE_CADDIE_V1.lieSuitability];
   if (lie === "recovery") return ["6i", "7i", "8i", "9i"].includes(club) ? 1 : 0;
   return values[adaptiveClubKind(club) as keyof typeof values] ?? values.iron ?? 0;
+}
+
+function greensideClubDecision(readings: RangeReading[], bag: ClubName[], effectiveDistanceM: number) {
+  const available = ["SW", "PW"].filter((club) => bag.includes(club));
+  if (!available.length) return undefined;
+  const sw = clubSummary(readings, "SW");
+  const pw = clubSummary(readings, "PW");
+  const strongEvidence = (preferred: typeof sw, alternative: typeof pw) =>
+    preferred.usableCount >= 5 && alternative.readings.length >= 5 &&
+    (preferred.playablePercentage || 0) >= (alternative.playablePercentage || 0) + 20 &&
+    (preferred.severeMissPercentage || 0) <= (alternative.severeMissPercentage || 0) + 5;
+  const chipType = effectiveDistanceM <= 35;
+  const defaultClub = chipType ? "SW" : "PW";
+  const alternative = defaultClub === "SW" ? "PW" : "SW";
+  const club = available.includes(defaultClub)
+    ? (available.includes(alternative) && strongEvidence(clubSummary(readings, alternative), clubSummary(readings, defaultClub)) ? alternative : defaultClub)
+    : available[0];
+  return { club, chipType };
 }
 
 export function adaptiveCaddieDecision(
@@ -778,21 +878,32 @@ export function adaptiveCaddieDecision(
   }
   if (!lie)
     return { targetDistanceM, effectiveDistanceM, candidates: [], reasons: [], status: "insufficient-data" };
-  if (effectiveDistanceM <= 35 && (lie === "fairway" || lie === "rough")) {
-    const wedge = ["PW", "SW"].find((club) => (bag || CLUBS).includes(club) && clubSummary(readings, club).typical);
-    if (wedge) return { recommendedClub: wedge, targetDistanceM, effectiveDistanceM, lie, candidates: [{ club: wedge, carryM: clubSummary(readings, wedge).typical, lieSuitability: 1, utility: 1 }], reasons: [{ key: "short-game", label: "Reason", value: "Scoring wedge for a short approach", tone: "positive" }], status: "recommended" };
-  }
   if (lie === "recovery") {
-    const recoveryClub = safeRecoveryClub(readings, bag);
     return {
-      recommendedClub: recoveryClub,
       targetDistanceM,
       effectiveDistanceM,
       lie,
-      candidates: recoveryClub ? [{ club: recoveryClub, carryM: clubSummary(readings, recoveryClub).typical, lieSuitability: 1, utility: 1 }] : [],
-      reasons: recoveryClub ? [{ key: "recovery", label: "Reason", value: "Conservative club to play back to safety", tone: "positive" }] : [],
-      status: recoveryClub ? "recovery-required" : "no-suitable-club",
+      candidates: [],
+      reasons: [{ key: "recovery", label: "Recovery shot", value: "Prioritise getting back into play and safety; choose a safe escape line.", tone: "positive" }],
+      status: "recovery-required",
     };
+  }
+  const greensideContext = lie === "bunker" || ((lie === "fairway" || lie === "rough") && effectiveDistanceM <= 100);
+  if (greensideContext) {
+    const greenside = greensideClubDecision(readings, bag || CLUBS, effectiveDistanceM);
+    if (greenside) {
+      const summary = clubSummary(readings, greenside.club);
+      return {
+        recommendedClub: greenside.club,
+        targetDistanceM,
+        effectiveDistanceM,
+        lie,
+        candidates: [{ club: greenside.club, ...(summary.typical !== undefined ? { carryM: summary.typical } : {}), lieSuitability: 1, utility: 1 }],
+        reasons: [{ key: "short-game", label: "Reason", value: greenside.chipType ? "SW default for a short greenside shot" : "Pitching wedge for a longer greenside shot", tone: "positive" }],
+        status: "recommended",
+      };
+    }
+    return { targetDistanceM, effectiveDistanceM, lie, candidates: [], reasons: [{ key: "short-game", label: "Reason", value: "No suitable greenside wedge data available.", tone: "warning" }], status: "no-suitable-club" };
   }
   const candidates = [...new Set(bag || CLUBS)]
     .map((club): AdaptiveClubCandidate => {
@@ -846,6 +957,13 @@ export function formatDate(date: string) {
     month: "short",
     year: "numeric",
   }).format(new Date(`${date}T12:00:00`));
+}
+
+export function localDateString(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 export function startOfWeek(date = new Date()) {

@@ -46,6 +46,17 @@ describe("local repository", () => {
     expect(mergeAppData(local, cloud)!.rounds[0].status).toBe("archived");
     expect(mergeAppData(local, cloud)!.rounds[0].holes).toHaveLength(1);
   });
+
+  it("never lets an in-progress local copy replace an archived cloud copy", () => {
+    const local = seedData();
+    const cloud = seedData();
+    const baseRound = { id: "round", date: "2026-09-19", courseName: "Test", overallNote: "", holes: [] };
+    cloud.rounds = [{ ...baseRound, status: "archived" as const, totalScore: 84, archivedAt: "2026-09-20T10:00:00.000Z", holes: [{ holeNumber: 1, score: 4, focusCategory: "Approach" as const, wentRight: "", wentWrong: "" }] }];
+    local.rounds = [{ ...baseRound, status: "in-progress" as const, holes: Array.from({ length: 9 }, (_, index) => ({ holeNumber: index + 1, score: 5, focusCategory: "Approach" as const, wentRight: "", wentWrong: "" })) }];
+    const merged = mergeAppData(local, cloud)!;
+    expect(merged.rounds[0].status).toBe("archived");
+    expect(merged.rounds[0].totalScore).toBe(84);
+  });
   it("persists app data without a network", () => {
     const data = seedData();
     saveLocalData(data);

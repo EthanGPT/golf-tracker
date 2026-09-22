@@ -9,6 +9,7 @@ import {
   isTeeTargetReachable,
   caddiePlan,
   caddieDecision,
+  resolveTeeDecision,
   adaptiveCaddieDecision,
   isValidGolfShotContext,
   teeRationale,
@@ -22,7 +23,55 @@ import {
   formMapCategoryStats,
   normalizedRoundScore,
   roundProgressInsights,
+  localDateString,
+  ensurePuttingShot,
+  appendHoleShot,
+  updateHoleShot,
 } from "./domain";
+
+describe("local calendar dates", () => {
+  it("formats midnight in the user's local calendar rather than UTC", () => {
+    const localMidnight = new Date(2026, 8, 22, 0, 30);
+    expect(localDateString(localMidnight)).toBe("2026-09-22");
+  });
+});
+
+describe("explicit putting transition", () => {
+  it("adds one Putter shot without changing other shot data", () => {
+    const approach = { id: "a", phase: "approach" as const, club: "7i" as const, outcome: "good" as const, note: "Green" };
+    const shots = ensurePuttingShot([approach]);
+    expect(shots).toHaveLength(2);
+    expect(shots.find((shot) => shot.phase === "putting")).toMatchObject({ club: "Putter" });
+    expect(shots[0]).toEqual(approach);
+  });
+
+  it("does not duplicate or overwrite an existing putting shot", () => {
+    const putting = { id: "p", phase: "putting" as const, club: "Putter" as const, outcomes: [{ outcome: "good" as const, note: "Good speed" }] };
+    const shots = ensurePuttingShot([putting]);
+    expect(shots).toEqual([putting]);
+  });
+});
+
+describe("chronological repeated hole shots", () => {
+  it("keeps repeated phases ordered and independently editable", () => {
+    const first = appendHoleShot([], "approach", "6i");
+    const withSecond = appendHoleShot(first, "approach", "PW");
+    const edited = updateHoleShot(withSecond, withSecond[1].id, {
+      outcomes: [{ outcome: "bad", note: "Thin" }],
+    });
+    expect(edited.map((shot) => shot.club)).toEqual(["6i", "PW"]);
+    expect(edited[0].outcomes).toBeUndefined();
+    expect(edited[1].outcomes?.[0].note).toBe("Thin");
+  });
+
+  it("supports repeated short-game shots without collapsing outcomes", () => {
+    const shots = appendHoleShot(appendHoleShot([], "short-game", "SW"), "short-game", "PW");
+    const updated = updateHoleShot(shots, shots[0].id, { outcome: "good", note: "Good chip on" });
+    expect(updated).toHaveLength(2);
+    expect(updated[0].outcome).toBe("good");
+    expect(updated[1].outcome).toBeUndefined();
+  });
+});
 
 describe("distance calculations", () => {
   const data = seedData();
@@ -171,6 +220,13 @@ describe("adaptive live caddie", () => {
     expect(result.recommendedClub).toBe("6i");
   });
 
+  it("resolves the same iron for every Par 3 tee surface", () => {
+    const resolved = resolveTeeDecision(readings, 3, 150);
+    expect(resolved?.club).toBe("6i");
+    expect(resolved?.plan.sequence[0]?.club).toBe("6i");
+    expect(resolved?.explanation?.primaryClub).toBe("6i");
+  });
+
   it("allows the pre-hole plan to select an iron off the tee", () => {
     const plan = caddiePlan(readings, 4, 300);
     expect(plan?.tee.club).toBe("6i");
@@ -201,13 +257,46 @@ describe("adaptive live caddie", () => {
   it("returns recovery behavior instead of normal green-distance selection", () => {
     const result = adaptiveCaddieDecision(readings, ["6i"], 160, 160, "recovery");
     expect(result.status).toBe("recovery-required");
+    expect(result.recommendedClub).toBeUndefined();
+    expect(result.candidates).toHaveLength(0);
     expect(result.reasons[0].value).toContain("safety");
   });
+
+  it("does not fabricate a precise club for a short recovery shot", () => {
+    const result = adaptiveCaddieDecision(readings, ["6i", "PW"], 20, 20, "recovery");
+    expect(result.status).toBe("recovery-required");
+    expect(result.recommendedClub).toBeUndefined();
+    expect(result.reasons[0].value).toContain("getting back into play");
+  });
+
 
   it("uses normal scoring for legitimate distances and wedge logic for short game", () => {
     expect(adaptiveCaddieDecision(readings, ["6i"], 150, 150, "fairway", 450).status).toBe("recommended");
     const wedgeReadings = [...readings, { id: "pw", club: "PW", distanceMetres: 95, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-19", createdAt: "2026-09-19" }];
     expect(adaptiveCaddieDecision(wedgeReadings, ["PW"], 27, 27, "fairway", 450).recommendedClub).toBe("PW");
+  });
+
+  it("prefers SW for chip-type greenside shots and PW for longer pitches", () => {
+    const wedges = [
+      ...readings,
+      ...Array.from({ length: 10 }, (_, index) => ({ id: `sw-${index}`, club: "SW", distanceMetres: 55, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-19", createdAt: `2026-09-2${index}` })),
+      { id: "pw", club: "PW", distanceMetres: 95, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-19", createdAt: "2026-09-19" },
+    ];
+    expect(adaptiveCaddieDecision(wedges, ["PW", "SW"], 20, 20, "rough").recommendedClub).toBe("SW");
+    expect(adaptiveCaddieDecision(wedges, ["PW", "SW"], 70, 70, "rough").recommendedClub).toBe("PW");
+  });
+
+  it("allows strong personal greenside evidence to override the default", () => {
+    const wedges = [
+      ...Array.from({ length: 10 }, (_, index) => ({ id: `sw-good-${index}`, club: "SW", distanceMetres: 55, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-19", createdAt: `2026-09-2${index}` })),
+      ...Array.from({ length: 10 }, (_, index) => ({ id: `pw-bad-${index}`, club: "PW", distanceMetres: 95, mishit: false, playable: false, severeMiss: true, sessionDate: "2026-09-19", createdAt: `2026-08-1${index}` })),
+    ];
+    expect(adaptiveCaddieDecision(wedges, ["PW", "SW"], 70, 70, "rough").recommendedClub).toBe("SW");
+  });
+
+  it("never selects a long club in greenside context", () => {
+    const result = adaptiveCaddieDecision(readings, ["Dr", "6i", "PW", "SW"], 20, 20, "bunker");
+    expect(["Dr", "6i", "7i", "8i", "9i", "3W", "4W-Hybrid"]).not.toContain(result.recommendedClub);
   });
 
   it.each(["fairway", "recovery", "rough", "bunker"] as const)("uses the same safe fallback for invalid %s location", (lie) => {

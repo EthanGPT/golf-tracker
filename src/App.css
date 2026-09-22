@@ -1644,6 +1644,78 @@ select:focus {
 .insights-clubs .insights-form-map {
   display: none;
 }
+.insights-overview .round-breakdown-panel,
+.insights-clubs .round-breakdown-panel {
+  display: none;
+}
+.round-breakdown-table {
+  overflow-x: auto;
+}
+.round-breakdown-row {
+  display: grid;
+  grid-template-columns: minmax(76px, 1.2fr) minmax(80px, 1.1fr) repeat(4, minmax(44px, 0.7fr));
+  gap: 8px;
+  align-items: center;
+  border-top: 1px solid var(--line);
+  padding: 9px 0;
+  font-size: 12px;
+  width: 100%;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+  padding-right: 58px;
+}
+.round-issues-tag {
+  position: absolute;
+  right: 0;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: var(--wash);
+  color: var(--forest);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+}
+.round-breakdown-row span:not(:first-child) {
+  text-align: right;
+}
+.round-breakdown-header {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.round-breakdown-detail {
+  display: grid;
+  gap: 5px;
+  border-top: 1px solid var(--line);
+  padding: 8px 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.round-breakdown-detail > div {
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  gap: 8px;
+}
+.round-breakdown-detail strong {
+  color: var(--forest);
+}
+.inline-score-input {
+  width: 42px;
+  min-height: 30px;
+  padding: 3px 5px;
+  border: 1px solid var(--forest);
+  border-radius: 6px;
+  text-align: center;
+  font: inherit;
+  font-weight: 700;
+}
 .round-progress-item {
   display: grid;
   gap: 4px;
@@ -1782,6 +1854,48 @@ select:focus {
   color: var(--forest);
   text-align: left;
   cursor: pointer;
+}
+.shot-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.shot-group-heading > .shot-group-toggle {
+  width: 100%;
+}
+.shot-group-toggle span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shot-group-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  margin-left: 8px;
+}
+.shot-add-button,
+.shot-group-edit {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 1px 3px;
+}
+.shot-add-button {
+  color: var(--forest);
+  font-size: 17px;
+  line-height: 1;
 }
 .shot-group-heading small {
   color: var(--muted);

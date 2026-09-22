@@ -57,7 +57,19 @@ function mergeRounds(local: AppData["rounds"], cloud: AppData["rounds"]) {
   for (const round of cloud) merged.set(round.id, round);
   for (const round of local) {
     const existing = merged.get(round.id);
-    if (!existing || (existing.status !== "archived" && round.status === "archived") || recordScore(round) >= recordScore(existing)) merged.set(round.id, round);
+    if (!existing) {
+      merged.set(round.id, round);
+      continue;
+    }
+    // Archived is terminal for lifecycle purposes. A stale local draft must
+    // never resurrect or overwrite an archived cloud round, and vice versa.
+    if (existing.status === "archived" || round.status === "archived") {
+      if (existing.status !== "archived" || round.status === "archived" && recordScore(round) >= recordScore(existing)) {
+        merged.set(round.id, round);
+      }
+      continue;
+    }
+    if (recordScore(round) >= recordScore(existing)) merged.set(round.id, round);
   }
   return [...merged.values()];
 }

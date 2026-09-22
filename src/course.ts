@@ -349,7 +349,11 @@ export function selectReachableTeeLandingCandidate(
   return candidates
     .map((candidate) => ({ candidate, effectiveDistanceM: effectiveDistance(candidate) }))
     .filter(({ effectiveDistanceM }) => Math.abs(clubCarryM - effectiveDistanceM) <= toleranceM)
-    .sort((a, b) => b.candidate.distanceFromTeeM - a.candidate.distanceFromTeeM)[0];
+    .sort((a, b) =>
+      b.candidate.hazardClearanceM - a.candidate.hazardClearanceM ||
+      b.candidate.distanceFromTeeM - a.candidate.distanceFromTeeM ||
+      a.candidate.id.localeCompare(b.candidate.id),
+    )[0];
 }
 
 const bearingDegrees = (from: LatLng, to: LatLng) => {

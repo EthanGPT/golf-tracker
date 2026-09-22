@@ -112,6 +112,18 @@ describe("course registry", () => {
     expect(Math.abs(145 - (selected?.effectiveDistanceM || 0))).toBeLessThanOrEqual(15);
   });
 
+  it("prefers the safer reachable landing candidate over a longer risky one", () => {
+    const selected = selectReachableTeeLandingCandidate(
+      [
+        { id: "risky", position: { latitude: 0, longitude: 0 }, distanceFromTeeM: 180, bearingDeg: 90, hazardClearanceM: 5, routeFraction: 0.8 },
+        { id: "safe", position: { latitude: 0, longitude: 0 }, distanceFromTeeM: 165, bearingDeg: 90, hazardClearanceM: 40, routeFraction: 0.7 },
+      ],
+      170,
+      () => 170,
+    );
+    expect(selected?.candidate.id).toBe("safe");
+  });
+
   it("keeps verified static geometry separate from bundled runtime geometry", () => {
     expect(validateCourseGeometry(HERMANUS_COURSE)).toEqual({
       mappedGreenCentres: 0,
