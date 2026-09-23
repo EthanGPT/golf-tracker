@@ -37,14 +37,31 @@ describe("local repository", () => {
     expect(merged.readings.find((reading) => reading.id === "shared-reading")?.distanceMetres).toBe(222);
   });
 
-  it("keeps the more complete round when the local copy is stale", () => {
+  it("uses the cloud round exactly when the same ID conflicts", () => {
     const local = seedData();
     const cloud = seedData();
     const baseRound = { id: "round", date: "2026-09-19", courseName: "Test", overallNote: "", status: "in-progress" as const, holes: [] };
     local.rounds = [baseRound];
     cloud.rounds = [{ ...baseRound, status: "archived", totalScore: 84, holes: [{ holeNumber: 1, score: 4, focusCategory: "Approach" as const, wentRight: "", wentWrong: "" }] }];
-    expect(mergeAppData(local, cloud)!.rounds[0].status).toBe("archived");
-    expect(mergeAppData(local, cloud)!.rounds[0].holes).toHaveLength(1);
+    expect(mergeAppData(local, cloud)!.rounds[0]).toEqual(cloud.rounds[0]);
+  });
+
+  it("does not let a larger corrupted archived local round replace cloud", () => {
+    const local = seedData();
+    const cloud = seedData();
+    const hole = { holeNumber: 10, score: 5, focusCategory: "Approach" as const, wentRight: "", wentWrong: "" };
+    const cloudRound = { id: "round-a", date: "2026-09-21", courseName: "Test", overallNote: "", status: "archived" as const, totalScore: 42, holes: [hole, { ...hole, holeNumber: 11 }] };
+    local.rounds = [{ ...cloudRound, totalScore: 45, holes: [...cloudRound.holes, { ...hole, holeNumber: 1, note: "corrupt" }] }];
+    cloud.rounds = [cloudRound];
+    expect(mergeAppData(local, cloud)!.rounds).toEqual([cloudRound]);
+  });
+
+  it("preserves a local-only offline archived round", () => {
+    const local = seedData();
+    const cloud = seedData();
+    local.rounds = [{ ...local.rounds[0], id: "offline", status: "archived" }];
+    cloud.rounds = [];
+    expect(mergeAppData(local, cloud)!.rounds.map((round) => round.id)).toEqual(["offline"]);
   });
 
   it("never lets an in-progress local copy replace an archived cloud copy", () => {

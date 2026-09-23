@@ -1653,7 +1653,7 @@ select:focus {
 }
 .round-breakdown-row {
   display: grid;
-  grid-template-columns: minmax(76px, 1.2fr) minmax(80px, 1.1fr) repeat(4, minmax(44px, 0.7fr));
+  grid-template-columns: minmax(80px, 1.1fr) minmax(76px, 1.2fr) repeat(4, minmax(44px, 0.7fr));
   gap: 8px;
   align-items: center;
   border-top: 1px solid var(--line);
@@ -1667,12 +1667,15 @@ select:focus {
   color: inherit;
   text-align: left;
   cursor: pointer;
-  position: relative;
-  padding-right: 58px;
+}
+.round-breakdown-date {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  text-align: left !important;
 }
 .round-issues-tag {
-  position: absolute;
-  right: 0;
   padding: 3px 6px;
   border-radius: 999px;
   background: var(--wash);
@@ -1690,6 +1693,9 @@ select:focus {
   font-weight: 700;
   text-transform: uppercase;
 }
+.round-breakdown-header span:nth-child(2) {
+  text-align: left;
+}
 .round-breakdown-detail {
   display: grid;
   gap: 5px;
@@ -1705,6 +1711,31 @@ select:focus {
 }
 .round-breakdown-detail strong {
   color: var(--forest);
+}
+@media (max-width: 600px) {
+  .round-breakdown-table {
+    overflow-x: hidden;
+  }
+  .round-breakdown-row {
+    grid-template-columns: 44px 82px repeat(4, 42px);
+    gap: 5px;
+    font-size: 11px;
+    width: max-content;
+    min-width: 100%;
+  }
+  .round-breakdown-row > span {
+    min-width: 0;
+  }
+  .round-breakdown-header {
+    font-size: 8px;
+    line-height: 1.1;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .round-issues-tag {
+    padding: 2px 4px;
+    font-size: 8px;
+  }
 }
 .inline-score-input {
   width: 42px;

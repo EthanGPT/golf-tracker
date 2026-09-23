@@ -26,6 +26,7 @@ import {
   clubDisplayLabel,
   convertMetres,
   formatDate,
+  formatShortDate,
   localDateString,
   personalisedRecommendation,
   roundTotal,
@@ -70,6 +71,8 @@ import {
   isSyncPending,
   mergeAppData,
   loadLocalData,
+  clearArchivedRoundDraft,
+  ROUND_DRAFT_KEY,
   markSyncPending,
   saveLocalData,
 } from "./localRepository";
@@ -119,6 +122,7 @@ function App() {
   const [authReady, setAuthReady] = useState(false);
   const [cloudError, setCloudError] = useState("");
   const [dataReady, setDataReady] = useState(false);
+  const cloudReadySessionRef = useRef<string | null>(null);
   const [screen, setScreen] = useState<Screen>(
     () =>
       (localStorage.getItem("golf-tracker-screen") as Screen) || "distances",
@@ -229,12 +233,33 @@ function App() {
   }, []);
   useEffect(() => {
     if (!authReady || !session) return;
+    // Do not allow data from a previous session (or pre-cloud local state) to
+    // be written while this session's authoritative snapshot is loading.
+    cloudReadySessionRef.current = null;
+    setDataReady(false);
     let cancelled = false;
     (async () => {
       const cloudData = await loadCloudData(session);
       if (!cancelled) {
         const localData = loadLocalData();
-        setData(mergeAppData(localData, cloudData) || seedData());
+        const reconciled = mergeAppData(localData, cloudData) || seedData();
+        if (cloudData) {
+          // Heal browser state before enabling the persistence effect. This
+          // prevents stale local archived rounds from being written back.
+          saveLocalData(reconciled);
+          clearArchivedRoundDraft(cloudData);
+          try {
+            const rawDraft = localStorage.getItem(ROUND_DRAFT_KEY);
+            const draft = rawDraft ? JSON.parse(rawDraft) as { id?: string } : null;
+            if (draft?.id && cloudData.rounds.some((round) => round.id === draft.id && round.status === "archived")) {
+              setRoundDraft(null);
+            }
+          } catch {
+            setRoundDraft(null);
+          }
+        }
+        setData(reconciled);
+        cloudReadySessionRef.current = session.user.id;
         setDataReady(true);
       }
     })().catch((error) => {
@@ -250,7 +275,7 @@ function App() {
     };
   }, [authReady, session]);
   useEffect(() => {
-    if (!data || !dataReady || !session) return;
+    if (!data || !dataReady || !session || cloudReadySessionRef.current !== session.user.id) return;
     saveCloudData(session, data)
       .then(() => markSyncPending(false))
       .catch((error) => {
@@ -1954,18 +1979,17 @@ function Progress({
         <div className="section-heading">
           <div>
             <span className="eyebrow">ROUND BREAKDOWN</span>
-            <h3>What changed from round to round</h3>
+            <h3>Issues in your recent rounds</h3>
           </div>
         </div>
         <div className="round-breakdown-table">
-          <div className="round-breakdown-row round-breakdown-header"><span>Round</span><span>Score</span><span>Tee</span><span>Approach</span><span>Short</span><span>Putting</span></div>
+          <div className="round-breakdown-row round-breakdown-header"><span>Score</span><span>Date</span><span>Tee</span><span>App</span><span>Short</span><span>Put</span></div>
           {recent.slice().reverse().map((round) => {
             const holesPlayed = round.holes.filter((hole) => hole.score > 0).length || round.holes.length;
             const troubleCounts = roundTroubleByCategory(round);
             const troubleDetails = roundTroubleDetailsByCategory(round);
             const detail = (category: keyof typeof troubleDetails) => troubleDetails[category].length ? troubleDetails[category].map((item) => `H${item.holeNumber}: ${item.detail}`).join(" · ") : "—";
-            const hasIssues = Object.values(troubleDetails).some((items) => items.length > 0);
-            return <Fragment key={round.id}><button type="button" className="round-breakdown-row" onClick={() => setExpandedBreakdownId(expandedBreakdownId === round.id ? null : round.id)}><span>{formatDate(round.date)}</span><span>{formatScoreToPar(roundScoreToPar(round))}</span><span>{troubleCounts["Tee shot"]}/{holesPlayed}</span><span>{troubleCounts.Approach}/{holesPlayed}</span><span>{troubleCounts["Short game"]}/{holesPlayed}</span><span>{troubleCounts.Putting}/{holesPlayed}</span>{hasIssues && <em className="round-issues-tag">Issues</em>}</button>{expandedBreakdownId === round.id && <div className="round-breakdown-detail"><div><strong>Tee</strong><span>{detail("Tee shot")}</span></div><div><strong>Approach</strong><span>{detail("Approach")}</span></div><div><strong>Short game</strong><span>{detail("Short game")}</span></div><div><strong>Putting</strong><span>{detail("Putting")}</span></div></div>}</Fragment>;
+            return <Fragment key={round.id}><button type="button" className="round-breakdown-row" onClick={() => setExpandedBreakdownId(expandedBreakdownId === round.id ? null : round.id)}><span>{formatScoreToPar(roundScoreToPar(round))}</span><span className="round-breakdown-date">{formatShortDate(round.date)}</span><span>{troubleCounts["Tee shot"]}/{holesPlayed}</span><span>{troubleCounts.Approach}/{holesPlayed}</span><span>{troubleCounts["Short game"]}/{holesPlayed}</span><span>{troubleCounts.Putting}/{holesPlayed}</span></button>{expandedBreakdownId === round.id && <div className="round-breakdown-detail"><div><strong>Tee</strong><span>{detail("Tee shot")}</span></div><div><strong>Approach</strong><span>{detail("Approach")}</span></div><div><strong>Short game</strong><span>{detail("Short game")}</span></div><div><strong>Putting</strong><span>{detail("Putting")}</span></div></div>}</Fragment>;
           })}
         </div>
       </section>

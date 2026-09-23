@@ -2,6 +2,7 @@ import type { AppData } from "./domain";
 
 const DATA_KEY = "golf-tracker-local-data";
 const PENDING_KEY = "golf-tracker-cloud-sync-pending";
+export const ROUND_DRAFT_KEY = "golf-tracker-round-draft";
 
 export function loadLocalData(): AppData | null {
   try {
@@ -56,22 +57,25 @@ function mergeRounds(local: AppData["rounds"], cloud: AppData["rounds"]) {
   const merged = new Map<string, AppData["rounds"][number]>();
   for (const round of cloud) merged.set(round.id, round);
   for (const round of local) {
-    const existing = merged.get(round.id);
-    if (!existing) {
-      merged.set(round.id, round);
-      continue;
-    }
-    // Archived is terminal for lifecycle purposes. A stale local draft must
-    // never resurrect or overwrite an archived cloud round, and vice versa.
-    if (existing.status === "archived" || round.status === "archived") {
-      if (existing.status !== "archived" || round.status === "archived" && recordScore(round) >= recordScore(existing)) {
-        merged.set(round.id, round);
-      }
-      continue;
-    }
-    if (recordScore(round) >= recordScore(existing)) merged.set(round.id, round);
+    // Cloud is canonical for an existing ID. Local-only records are retained
+    // so offline-created rounds are not lost.
+    if (!merged.has(round.id)) merged.set(round.id, round);
   }
   return [...merged.values()];
+}
+
+export function clearArchivedRoundDraft(cloud: AppData | null) {
+  if (!cloud) return;
+  try {
+    const raw = localStorage.getItem(ROUND_DRAFT_KEY);
+    if (!raw) return;
+    const draft = JSON.parse(raw) as { id?: string };
+    if (draft.id && cloud.rounds.some((round) => round.id === draft.id && round.status === "archived")) {
+      localStorage.removeItem(ROUND_DRAFT_KEY);
+    }
+  } catch {
+    // Ignore malformed or unavailable draft storage.
+  }
 }
 
 export function mergeAppData(local: AppData | null, cloud: AppData | null): AppData | null {

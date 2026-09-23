@@ -959,6 +959,11 @@ export function formatDate(date: string) {
   }).format(new Date(`${date}T12:00:00`));
 }
 
+export function formatShortDate(date: string) {
+  const [year, month, day] = date.split("-");
+  return `${day}/${month}/${year.slice(-2)}`;
+}
+
 export function localDateString(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
