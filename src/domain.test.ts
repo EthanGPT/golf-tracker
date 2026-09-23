@@ -30,6 +30,7 @@ import {
   buildShotEvidence,
   getContextEvidence,
   shotLearningInsights,
+  enrichShotWithContext,
 } from "./domain";
 
 describe("local calendar dates", () => {
@@ -57,6 +58,19 @@ describe("personal shot learning evidence", () => {
     expect(getContextEvidence(rounds, { phase: "approach", club: "7i", distanceM: 150, lie: "bunker" })[0].weight).toBeLessThan(1);
   });
 
+  it("excludes legacy evidence without a start distance from distance-specific queries", () => {
+    const legacy = learningRound("legacy", "7i", "Hit green");
+    Object.assign(legacy.holes[0].shots![0], { startDistanceToTargetM: undefined });
+    expect(getContextEvidence([legacy], { phase: "approach", club: "7i", distanceM: 145, lie: "fairway" })).toHaveLength(0);
+  });
+
+  it("enriches a first tee shot from a trusted mapped tee origin", () => {
+    const start = { latitude: 0, longitude: 0, capturedAt: "2026-09-20T08:00:00Z" };
+    const end = { latitude: 0, longitude: 0.001, capturedAt: "2026-09-20T08:20:00Z" };
+    const shot = enrichShotWithContext({ id: "tee", phase: "tee", club: "3W" }, { position: start, distanceToTargetM: 200, lie: "tee" }, { position: end, distanceToTargetM: 40 }, 111);
+    expect(shot).toMatchObject({ startDistanceToTargetM: 200, endDistanceToTargetM: 40, startLie: "tee", actualDistanceM: 111, startPosition: start, endPosition: end });
+  });
+
   it("only surfaces learned findings after repeated evidence", () => {
     expect(shotLearningInsights([learningRound("a", "8i", "Too short")])).toHaveLength(0);
     const findings = shotLearningInsights([
@@ -65,6 +79,29 @@ describe("personal shot learning evidence", () => {
       learningRound("c", "8i", "Too short"),
     ]);
     expect(findings[0]?.text).toContain("8i");
+  });
+
+  it("does not let one same-hole tee result override the baseline", () => {
+    const readings = [
+      ...Array.from({ length: 8 }, (_, i) => ({ id: `dr-${i}`, club: "Dr" as const, distanceMetres: 220, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-20", createdAt: `2026-09-${10 + i}` })),
+      ...Array.from({ length: 3 }, (_, i) => ({ id: `3w-${i}`, club: "3W" as const, distanceMetres: 200, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-20", createdAt: `2026-09-${10 + i}` })),
+    ];
+    const round = { id: "one", date: "2026-09-20", courseName: "Test", courseId: "test-course", tee: "white", overallNote: "", status: "archived" as const, holes: [{ holeNumber: 4, score: 4, focusCategory: "Tee shot" as const, wentRight: "", wentWrong: "", shots: [{ id: "s", phase: "tee" as const, club: "3W" as const, startDistanceToTargetM: 200, outcomes: [{ outcome: "good" as const, note: "Good direction" }] }] }] };
+    const result = resolveTeeDecision(readings, 4, 200, [round], { courseId: "test-course", holeNumber: 4, tee: "white" });
+    expect(result?.club).toBe("Dr");
+  });
+
+  it("keeps tee plan, sequence, and explanation aligned after repeated learned results", () => {
+    const readings = [
+      ...Array.from({ length: 6 }, (_, i) => ({ id: `dr-${i}`, club: "Dr" as const, distanceMetres: 220, mishit: false, playable: false, severeMiss: true, sessionDate: "2026-09-20", createdAt: `2026-09-${10 + i}` })),
+      ...Array.from({ length: 3 }, (_, i) => ({ id: `3w-${i}`, club: "3W" as const, distanceMetres: 200, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-20", createdAt: `2026-09-${10 + i}` })),
+    ];
+    const rounds = Array.from({ length: 3 }, (_, i) => ({ id: `r-${i}`, date: "2026-09-20", courseName: "Test", courseId: "test-course", tee: "white", overallNote: "", status: "archived" as const, holes: [{ holeNumber: 4, score: 4, focusCategory: "Tee shot" as const, wentRight: "", wentWrong: "", shots: [{ id: `s-${i}`, phase: "tee" as const, club: "3W" as const, startDistanceToTargetM: 200, outcomes: [{ outcome: "good" as const, note: "Good direction" }] }] }] }));
+    const result = resolveTeeDecision(readings, 4, 200, rounds, { courseId: "test-course", holeNumber: 4, tee: "white" });
+    expect(result?.club).toBe("3W");
+    expect(result?.plan.tee.club).toBe("3W");
+    expect(result?.plan.sequence[0]?.club).toBe("3W");
+    expect(result?.explanation?.primaryClub).toBe("3W");
   });
 });
 

@@ -35,6 +35,7 @@ import {
   roundTroubleDetailsByCategory,
   roundTroubleByCategory,
   shotLearningInsights,
+  enrichShotWithContext,
   recentCategoryTroubleStats,
   ensurePuttingShot,
   appendHoleShot,
@@ -2613,31 +2614,26 @@ function RoundMode({
         : undefined;
       const previousPosition = currentHole.latestShotContext?.position || teeStartContext?.position;
       const travelDistance = previousPosition ? distanceBetweenMeters(previousPosition, position) : 0;
+      const previousAccuracy = currentHole.latestShotContext?.position.accuracyM;
       const validTravel = previousPosition && travelDistance >= 5 && isValidGolfShotContext(
         travelDistance,
         holeDistance(holeNumber, draft.tee || "white"),
-        Math.max(previousPosition.accuracyM || Infinity, position.accuracyM || Infinity),
+        Math.max(previousAccuracy ?? 0, position.accuracyM ?? 0),
       );
       const shots = currentHole.shots?.map((shot, shotIndex, allShots) =>
         shotIndex === allShots.length - 1 && validTravel
-          ? {
-              ...shot,
-              actualDistanceM: Math.round(travelDistance),
-              startDistanceToTargetM: currentHole.latestShotContext?.distanceToTargetM || teeStartContext?.distanceToTargetM,
-              endDistanceToTargetM: context.distanceToTargetM,
-              startLie: currentHole.latestShotContext?.lie || teeStartContext?.lie,
-              startPosition: currentHole.latestShotContext?.position || teeStartContext?.position,
-              endPosition: context.position,
-            }
+          ? enrichShotWithContext(
+              shot,
+              {
+                position: currentHole.latestShotContext?.position || teeStartContext!.position,
+                distanceToTargetM: currentHole.latestShotContext?.distanceToTargetM || teeStartContext!.distanceToTargetM,
+                lie: currentHole.latestShotContext?.lie || teeStartContext?.lie,
+              },
+              context,
+              Math.round(travelDistance),
+            )
           : shotIndex === allShots.length - 1 && currentHole.latestShotContext
-            ? {
-                ...shot,
-                startDistanceToTargetM: currentHole.latestShotContext?.distanceToTargetM || teeStartContext?.distanceToTargetM,
-                endDistanceToTargetM: context.distanceToTargetM,
-                startLie: currentHole.latestShotContext?.lie || teeStartContext?.lie,
-                startPosition: currentHole.latestShotContext?.position || teeStartContext?.position,
-                endPosition: context.position,
-              }
+            ? enrichShotWithContext(shot, currentHole.latestShotContext, context)
           : shot,
       );
       updateHole({ latestShotContext: context, ...(shots ? { shots } : {}) });

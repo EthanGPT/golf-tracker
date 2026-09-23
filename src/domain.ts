@@ -150,6 +150,23 @@ export function appendHoleShot(shots: HoleShot[], phase: ShotPhase, club?: ClubN
 export function updateHoleShot(shots: HoleShot[], shotId: string, update: Partial<HoleShot>) {
   return shots.map((shot) => shot.id === shotId ? { ...shot, ...update } : shot);
 }
+
+export function enrichShotWithContext(
+  shot: HoleShot,
+  start: Pick<ShotContext, "position" | "distanceToTargetM" | "lie">,
+  end: Pick<ShotContext, "position" | "distanceToTargetM">,
+  actualDistanceM?: number,
+) {
+  return {
+    ...shot,
+    ...(actualDistanceM !== undefined ? { actualDistanceM } : {}),
+    startDistanceToTargetM: start.distanceToTargetM,
+    endDistanceToTargetM: end.distanceToTargetM,
+    startLie: start.lie,
+    startPosition: start.position,
+    endPosition: end.position,
+  };
+}
 export type ShotLie = "tee" | "fairway" | "rough" | "bunker" | "recovery";
 
 export type ShotContext = {
@@ -350,6 +367,7 @@ export function getContextEvidence(rounds: Round[], input: {
       if (input.tee && item.tee === input.tee) weight += 0.5;
       if (input.lie && item.startLie === input.lie) weight += 1;
       else if (input.lie && item.startLie && item.startLie !== input.lie) weight *= 0.25;
+      if (input.distanceM !== undefined && item.startDistanceM === undefined) return null;
       if (input.distanceM !== undefined && item.startDistanceM !== undefined) {
         const distance = Math.abs(item.startDistanceM - input.distanceM);
         if (distance > distanceToleranceM * 3) return null;
@@ -964,11 +982,17 @@ export function resolveTeeDecision(
   const selectedClub = learnedBest && learnedBest.score > 0 ? learnedBest.club : plan.tee.club;
   const selectedExplanation = caddieDecision(readings, par, targetDistance, selectedClub);
   const selectedSummary = clubSummary(readings, selectedClub);
+  const selectedTee = selectedSummary.typical === undefined || selectedClub === plan.tee.club
+    ? plan.tee
+    : { ...plan.tee, club: selectedClub, carry: selectedSummary.typical };
+  const selectedSequence = selectedClub === plan.sequence[0]?.club || !plan.sequence.length
+    ? plan.sequence
+    : [{ ...plan.sequence[0], club: selectedClub, carry: selectedSummary.typical ?? plan.sequence[0].carry }, ...plan.sequence.slice(1)];
   const selectedPlan = selectedClub === plan.tee.club || selectedSummary.typical === undefined
     ? plan
-    : { ...plan, tee: { ...plan.tee, club: selectedClub, carry: selectedSummary.typical } };
+    : { ...plan, tee: selectedTee, sequence: selectedSequence };
   return {
-    club: par === 3 ? explanation?.primaryClub || plan.sequence[0]?.club || selectedClub : selectedClub,
+    club: selectedClub,
     plan: selectedPlan,
     explanation: selectedExplanation || explanation,
   };
