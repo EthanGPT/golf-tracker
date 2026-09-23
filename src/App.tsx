@@ -1809,7 +1809,7 @@ function Progress({
     const playedHoles = round.holes.filter((hole) => hole.score > 0).length || round.holes.length;
     const score = round.totalScore || roundTotal(round);
     const par = round.holes.reduce((sum, hole) => sum + holePar(hole.holeNumber), 0);
-    return playedHoles ? ((score - par) / playedHoles) * 18 : 0;
+    return playedHoles ? score - par : 0;
   });
   const recentCategoryStats = recentCategoryTroubleStats(data.rounds, holePar);
   const clubStats = DISTANCE_CLUBS.map((club) => {
@@ -1858,9 +1858,15 @@ function Progress({
   const latestHoles = latestRound ? latestRound.holes.filter((hole) => hole.score > 0).length || latestRound.holes.length : 0;
   const latestPar = latestRound ? latestRound.holes.reduce((sum, hole) => sum + holePar(hole.holeNumber), 0) : 0;
   const previous = scores.length > 1 ? scores.at(-2) : undefined;
+  const previousRound = recent.length > 1 ? recent.at(-2) : undefined;
+  const comparableScore = (score: number, round: AppData["rounds"][number], otherRound: AppData["rounds"][number]) => {
+    const holes = round.holes.filter((hole) => hole.score > 0).length || round.holes.length;
+    const otherHoles = otherRound.holes.filter((hole) => hole.score > 0).length || otherRound.holes.length;
+    return holes !== otherHoles && holes ? (score / holes) * 18 : score;
+  };
   const scoreDelta =
-    latest !== undefined && previous !== undefined
-      ? latest - previous
+    latest !== undefined && previous !== undefined && latestRound && previousRound
+      ? comparableScore(latest, latestRound, previousRound) - comparableScore(previous, previousRound, latestRound)
       : undefined;
   const selectedRound = selectedRoundId
     ? archived.find((round) => round.id === selectedRoundId)
@@ -2521,8 +2527,9 @@ function RoundMode({
         }
       : undefined;
   })();
-  const teeWind = teeOrigin && teeTarget && weather
-    ? calculateShotWind(weather, bearingBetween(teeOrigin, teeTarget.position))
+  const windTarget = teeTarget || getTeeTarget(courseId, holeNumber, draft.tee || "white");
+  const teeWind = teeOrigin && windTarget && weather
+    ? calculateShotWind(weather, bearingBetween(teeOrigin, windTarget.position))
     : undefined;
   const teeAdjustment = teeWind && teeTarget
     ? calculateWindAdjustedDistance(distanceBetweenMeters(teeOrigin!, teeTarget.position), teeWind)
@@ -2615,9 +2622,7 @@ function RoundMode({
       </div>
       <div className="compact-caddie-row">
         <Caddie
-          teeOrigin={teeOrigin}
           teeWind={teeWind}
-          teePlayingDistance={teeAdjustment?.effectiveDistanceM}
           teeTargetName={teeTarget?.name}
           teeTargetDistance={teeTarget ? Math.round(distanceBetweenMeters(teeOrigin!, teeTarget.position)) : undefined}
           teeDecision={teeDecision}
@@ -2840,18 +2845,14 @@ function RoundMode({
 }
 
 function Caddie({
-  teeOrigin,
   teeWind,
-  teePlayingDistance,
   teeTargetName,
   teeTargetDistance,
   teeDecision,
   teePositionStatus,
   onCaptureTeeOrigin,
 }: {
-  teeOrigin?: { latitude: number; longitude: number; accuracyM?: number };
   teeWind?: ReturnType<typeof calculateShotWind>;
-  teePlayingDistance?: number;
   teeTargetName?: string;
   teeTargetDistance?: number;
   teeDecision?: ReturnType<typeof resolveTeeDecision>;
@@ -2876,15 +2877,13 @@ function Caddie({
       {teeTargetName && teeTargetDistance !== undefined && (
         <small>{teeTargetName} · {teeTargetDistance}m</small>
       )}
-      {teePlayingDistance !== undefined && (
-        <small>Plays ~{Math.round(teePlayingDistance)}m</small>
+      {decision?.reasons.find((reason) => reason.key === "primary-playable")?.value && (
+        <small>{decision.reasons.find((reason) => reason.key === "primary-playable")?.value} playable</small>
       )}
-      <small>
-        {decision?.reasons.find((reason) => ["primary-range", "primary-playable"].includes(reason.key))?.value ||
-          "Selected from your carry and risk data."}
-      </small>
-      {teeOrigin && teeWind && teeWind.label && (
-        <small className="caddie-weather">{teeWind.label}</small>
+      {teeWind && (
+        <small className="caddie-weather">
+          {teeWind.label || `${Math.round(teeWind.windSpeedKmh)} km/h wind`}
+        </small>
       )}
       {showDecision && decision && (
         <div
@@ -2922,43 +2921,10 @@ function Caddie({
                   ? "Selected from your available carry and risk data."
                   : "Limited personal data for this club.")}
             </p>
-            <p className="caddie-inline-metrics">
-              {decision.reasons
-                .filter((reason) =>
-                  [
-                    "primary-carry",
-                    "primary-range",
-                    "primary-playable",
-                    "primary-severe",
-                  ].includes(reason.key),
-                )
-                .map((reason) =>
-                    reason.key === "primary-carry"
-                      ? `${reason.value} carry`
-                      : reason.key === "primary-range"
-                        ? reason.value
-                      : reason.key === "primary-playable"
-                      ? `${reason.value} playable`
-                      : `${reason.value} severe`,
-                )
-                .join(" · ")}
-            </p>
-            {teeTargetName && teeTargetDistance !== undefined && (
-              <div className="caddie-conditions">
-                <span className="eyebrow">TARGET</span>
-                <b>{teeTargetName} · {teeTargetDistance}m</b>
-              </div>
-            )}
-            {teePlayingDistance !== undefined && (
-              <div className="caddie-conditions">
-                <span className="eyebrow">PLAYS</span>
-                <b>~{Math.round(teePlayingDistance)}m</b>
-              </div>
-            )}
-            {teeWind?.label && (
+            {teeWind && (
               <div className="caddie-conditions">
                 <span className="eyebrow">WIND</span>
-                <b>{teeWind.label}</b>
+                <b>{teeWind.label || `${Math.round(teeWind.windSpeedKmh)} km/h wind`}</b>
               </div>
             )}
             {onCaptureTeeOrigin && (
@@ -3124,7 +3090,8 @@ function ShotGroups({
   const addShot = (phase: ShotPhase, club?: ClubName) => {
     setActivePhase(phase);
     refocusSelector();
-    setShots(appendHoleShot(shots, phase, phase === "putting" ? "Putter" : club));
+    const nextShots = appendHoleShot(shots, phase, phase === "putting" ? "Putter" : club);
+    setShots(nextShots);
   };
   const setOutcome = (
     shotId: string,
@@ -3177,7 +3144,7 @@ function ShotGroups({
                 {groupShots.length > 0 && group.phase !== "putting" && <span>{groupShots.map((shot) => shot.club || "Choose club").join(" · ")}</span>}
               </button>
               <div className="shot-group-actions">
-                {!['tee'].includes(group.phase) && <button type="button" className="shot-add-button" aria-label={`Add ${group.label} shot`} onClick={(event) => { event.stopPropagation(); addShot(group.phase, group.phase === "putting" ? "Putter" : undefined); }}>+</button>}
+                {!['tee'].includes(group.phase) && <button type="button" className="shot-add-button" aria-label={`Add ${group.label} shot`} onClick={(event) => { event.stopPropagation(); if (activePhase !== group.phase) { setActivePhase(group.phase); refocusSelector(); } else { addShot(group.phase, group.phase === "putting" ? "Putter" : undefined); } }}>+</button>}
                 <button type="button" className="shot-group-edit" onClick={(event) => { event.stopPropagation(); setActivePhase(activePhase === group.phase ? null : group.phase); refocusSelector(); }}>
                   {activePhase === group.phase ? "Close" : groupShots.length ? "Edit" : "Add"}
                 </button>
@@ -3186,7 +3153,8 @@ function ShotGroups({
             {activePhase === group.phase && (
               <div className="shot-clubs">
                 {groupShots.map((shot, shotIndex) => group.phase !== "putting" ? (
-                  <div className="shot-entry" key={shot.id}>
+                  <Fragment key={shot.id}>
+                  <div className="shot-entry">
                     <small>{groupShots.length > 1 ? `${group.label} ${shotIndex + 1}` : group.label}</small>
                     <div>
                       {group.clubs.map((club) => (
@@ -3201,6 +3169,17 @@ function ShotGroups({
                       ))}
                     </div>
                   </div>
+                  {shot.club && (
+                    <div className="shot-outcomes">
+                      <small>{groupShots.length > 1 ? `${group.label} ${shotIndex + 1}` : group.label} outcomes</small>
+                      {outcomeOptions[group.phase].good.concat(outcomeOptions[group.phase].bad).map((note) => {
+                        const outcome = outcomeOptions[group.phase].good.includes(note) ? "good" : "bad";
+                        const selected = (shot.outcomes || (shot.note ? [{ outcome: shot.outcome || "bad", note: shot.note }] : [])).some((item) => item.outcome === outcome && item.note === note);
+                        return <button type="button" key={note} className={selected ? `selected ${outcome}` : ""} onClick={() => setOutcome(shot.id, group.phase, outcome, note)}>{outcome === "good" ? "✓" : "×"} {note}</button>;
+                      })}
+                    </div>
+                  )}
+                  </Fragment>
                 ) : null)}
                 {!groupShots.length && group.phase !== "putting" && (
                   <div className="shot-first-club-choice">
@@ -3209,63 +3188,6 @@ function ShotGroups({
                 )}
               </div>
             )}
-            {groupShots.map((shot, shotIndex) => shot && activePhase === group.phase && (
-              <div className="shot-outcomes" key={`${shot.id}-outcomes`}>
-                <small>{groupShots.length > 1 ? `${group.label} ${shotIndex + 1}` : group.label} outcomes</small>
-                {outcomeOptions[group.phase].good.map((note) => (
-                  <button
-                    type="button"
-                    key={note}
-                    className={
-                      (
-                        shot.outcomes ||
-                        (shot.note
-                          ? [
-                              {
-                                outcome: shot.outcome || "bad",
-                                note: shot.note,
-                              },
-                            ]
-                          : [])
-                      ).some(
-                        (item) => item.outcome === "good" && item.note === note,
-                      )
-                        ? "selected good"
-                        : ""
-                    }
-                      onClick={() => setOutcome(shot.id, group.phase, "good", note)}
-                  >
-                    ✓ {note}
-                  </button>
-                ))}
-                {outcomeOptions[group.phase].bad.map((note) => (
-                  <button
-                    type="button"
-                    key={note}
-                    className={
-                      (
-                        shot.outcomes ||
-                        (shot.note
-                          ? [
-                              {
-                                outcome: shot.outcome || "bad",
-                                note: shot.note,
-                              },
-                            ]
-                          : [])
-                      ).some(
-                        (item) => item.outcome === "bad" && item.note === note,
-                      )
-                        ? "selected bad"
-                        : ""
-                    }
-                      onClick={() => setOutcome(shot.id, group.phase, "bad", note)}
-                  >
-                    × {note}
-                  </button>
-                ))}
-              </div>
-            ))}
           </div>
         );
       })}

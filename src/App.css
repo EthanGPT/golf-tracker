@@ -1946,6 +1946,11 @@ select:focus {
   flex-wrap: wrap;
   gap: 6px;
 }
+.shot-entry,
+.shot-outcomes,
+.shot-first-club-choice {
+  flex-basis: 100%;
+}
 .shot-clubs button,
 .shot-outcomes button,
 .bag-grid button {
