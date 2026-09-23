@@ -72,7 +72,6 @@ export type HoleShot = {
   startLie?: ShotLie;
   startPosition?: ShotContext["position"];
   endPosition?: ShotContext["position"];
-  effectiveDistanceM?: number;
 };
 export type CaddieContext = {
   windSpeed?: number;
@@ -242,7 +241,7 @@ export function getOnCourseClubAdjustment(rounds: Round[], club: ClubName, basel
   const evidence: Array<{ kind: "actual" | "short" | "long" | "good"; value: number }> = [];
   for (const round of rounds) for (const hole of round.holes) for (const shot of hole.shots || []) {
     if (shot.club !== club) continue;
-    if (shot.actualDistanceM !== undefined && shot.actualDistanceM >= 5) {
+    if (shot.actualDistanceM !== undefined && shot.actualDistanceM >= 5 && shot.startDistanceToTargetM === undefined && shot.endDistanceToTargetM === undefined) {
       evidence.push({ kind: "actual", value: shot.actualDistanceM });
       continue;
     }
@@ -339,6 +338,7 @@ export function getContextEvidence(rounds: Round[], input: {
   courseId?: string;
   holeNumber?: number;
   tee?: string;
+  referenceDate?: string | number | Date;
 }) {
   const distanceToleranceM = 12;
   return buildShotEvidence(rounds)
@@ -355,7 +355,8 @@ export function getContextEvidence(rounds: Round[], input: {
         if (distance > distanceToleranceM * 3) return null;
         weight *= Math.max(0.25, 1 - distance / (distanceToleranceM * 3));
       }
-      const ageDays = Math.max(0, (Date.now() - Date.parse(item.date)) / 86400000);
+      const referenceTime = input.referenceDate === undefined ? Date.now() : new Date(input.referenceDate).getTime();
+      const ageDays = Math.max(0, (referenceTime - Date.parse(item.date)) / 86400000);
       weight *= Math.pow(0.995, ageDays);
       return { ...item, weight };
     })
@@ -853,10 +854,11 @@ export function caddieDecision(
   readings: RangeReading[],
   par: number,
   targetDistance: number,
+  selectedClub?: ClubName,
 ): CaddieDecision | undefined {
   const result = caddiePlan(readings, par, targetDistance);
   if (!result) return undefined;
-  const primary = result.sequence[0];
+  const primary = selectedClub ? { club: selectedClub } as typeof result.sequence[number] : result.sequence[0];
   const followUp = result.sequence[1];
   const primarySummary = primary
     ? clubSummary(readings, primary.club)
@@ -958,12 +960,17 @@ export function resolveTeeDecision(
     const negative = evidence.reduce((sum, item) => sum + (item.negative ? item.weight : 0), 0);
     return { club, weight, score: weight >= 2 ? ((positive - negative) / weight) * Math.min(1, weight / 6) : 0 };
   });
-  const learnedBest = learned.filter((item) => item.weight >= 2).sort((a, b) => b.score - a.score)[0];
+  const learnedBest = learned.filter((item) => item.weight >= 2 && getContextEvidence(rounds, { phase: "tee", club: item.club, ...context }).length >= 3).sort((a, b) => b.score - a.score)[0];
   const selectedClub = learnedBest && learnedBest.score > 0 ? learnedBest.club : plan.tee.club;
+  const selectedExplanation = caddieDecision(readings, par, targetDistance, selectedClub);
+  const selectedSummary = clubSummary(readings, selectedClub);
+  const selectedPlan = selectedClub === plan.tee.club || selectedSummary.typical === undefined
+    ? plan
+    : { ...plan, tee: { ...plan.tee, club: selectedClub, carry: selectedSummary.typical } };
   return {
     club: par === 3 ? explanation?.primaryClub || plan.sequence[0]?.club || selectedClub : selectedClub,
-    plan,
-    explanation,
+    plan: selectedPlan,
+    explanation: selectedExplanation || explanation,
   };
 }
 
@@ -1076,7 +1083,8 @@ export function adaptiveCaddieDecision(
       const learnedWeight = learned.reduce((sum, item) => sum + item.weight, 0);
       const learnedPositive = learned.reduce((sum, item) => sum + (item.positive ? item.weight : 0), 0);
       const learnedNegative = learned.reduce((sum, item) => sum + (item.negative ? item.weight : 0), 0);
-      const contextualScore = learnedWeight >= 1 ? Math.max(-0.18, Math.min(0.18, ((learnedPositive - learnedNegative) / learnedWeight) * Math.min(1, learnedWeight / 6))) : 0;
+      const observationCount = learned.length;
+      const contextualScore = observationCount >= 2 ? Math.max(-0.18, Math.min(0.18, ((learnedPositive - learnedNegative) / Math.max(learnedWeight, 1)) * Math.min(1, observationCount / 6))) : 0;
       const excluded = !carry || suitability === 0;
       if (excluded) return { club, carryM: carry, lieSuitability: suitability, excluded: true, exclusionReason: !carry ? "No carry data" : "Not suitable from this lie" };
       const gap = Math.abs(carry - (effectiveDistanceM + onCourse.adjustmentM));

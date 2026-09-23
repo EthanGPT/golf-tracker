@@ -2559,7 +2559,9 @@ function RoundMode({
     holePar(holeNumber),
     holePar(holeNumber) === 3
       ? teeAdjustment?.effectiveDistanceM || holeDistance(holeNumber, draft.tee || "white")
-      : holeDistance(holeNumber, draft.tee || "white"),
+      : teeTarget
+        ? calculateWindAdjustedDistance(distanceBetweenMeters(teeOrigin!, teeTarget.position), teeWind)?.effectiveDistanceM || distanceBetweenMeters(teeOrigin!, teeTarget.position)
+        : holeDistance(holeNumber, draft.tee || "white"),
     rounds,
     { courseId, holeNumber, tee: draft.tee || "white" },
   );
@@ -2598,7 +2600,18 @@ function RoundMode({
         shotBearingDeg: Math.round(bearingBetween(position, target.position)),
         capturedAt: position.capturedAt,
       };
-      const previousPosition = currentHole.latestShotContext?.position;
+      const teeShot = currentHole.shots?.filter((shot) => shot.phase === "tee").at(-1);
+      const teeStartPosition: { latitude: number; longitude: number; accuracyM?: number; capturedAt: string } | undefined = teeOrigin
+        ? { latitude: teeOrigin.latitude, longitude: teeOrigin.longitude, accuracyM: "accuracyM" in teeOrigin && typeof teeOrigin.accuracyM === "number" ? teeOrigin.accuracyM : undefined, capturedAt: "capturedAt" in teeOrigin && typeof teeOrigin.capturedAt === "string" ? teeOrigin.capturedAt : new Date().toISOString() }
+        : undefined;
+      const teeStartContext = !currentHole.latestShotContext && teeShot && teeOrigin
+        ? {
+            position: teeStartPosition!,
+            distanceToTargetM: Math.round(distanceBetweenMeters(teeStartPosition!, target.position)),
+            lie: "tee" as const,
+          }
+        : undefined;
+      const previousPosition = currentHole.latestShotContext?.position || teeStartContext?.position;
       const travelDistance = previousPosition ? distanceBetweenMeters(previousPosition, position) : 0;
       const validTravel = previousPosition && travelDistance >= 5 && isValidGolfShotContext(
         travelDistance,
@@ -2610,19 +2623,19 @@ function RoundMode({
           ? {
               ...shot,
               actualDistanceM: Math.round(travelDistance),
-              startDistanceToTargetM: currentHole.latestShotContext?.distanceToTargetM,
+              startDistanceToTargetM: currentHole.latestShotContext?.distanceToTargetM || teeStartContext?.distanceToTargetM,
               endDistanceToTargetM: context.distanceToTargetM,
-              startLie: currentHole.latestShotContext?.lie,
-              startPosition: currentHole.latestShotContext?.position,
+              startLie: currentHole.latestShotContext?.lie || teeStartContext?.lie,
+              startPosition: currentHole.latestShotContext?.position || teeStartContext?.position,
               endPosition: context.position,
             }
           : shotIndex === allShots.length - 1 && currentHole.latestShotContext
             ? {
                 ...shot,
-                startDistanceToTargetM: currentHole.latestShotContext.distanceToTargetM,
+                startDistanceToTargetM: currentHole.latestShotContext?.distanceToTargetM || teeStartContext?.distanceToTargetM,
                 endDistanceToTargetM: context.distanceToTargetM,
-                startLie: currentHole.latestShotContext.lie,
-                startPosition: currentHole.latestShotContext.position,
+                startLie: currentHole.latestShotContext?.lie || teeStartContext?.lie,
+                startPosition: currentHole.latestShotContext?.position || teeStartContext?.position,
                 endPosition: context.position,
               }
           : shot,
