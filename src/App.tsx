@@ -766,7 +766,7 @@ function AuthScreen({ onGuest }: { onGuest: () => void }) {
           <div className="preview-data-grid">
             <div><span>YOUR CARRY</span><strong>214m</strong></div>
             <div><span>PLAYABLE RATE</span><strong>82%</strong></div>
-            <div><span>MISS RISK</span><strong>LOW</strong></div>
+            <div><span>SEVERE MISS %</span><strong>12%</strong></div>
             <div><span>WIND ADJUSTMENT</span><strong>+8m</strong></div>
           </div>
           <div className="preview-foot"><span className="preview-dot" />Recommendation built from your game data</div>
