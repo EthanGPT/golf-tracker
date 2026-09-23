@@ -27,12 +27,44 @@ import {
   ensurePuttingShot,
   appendHoleShot,
   updateHoleShot,
+  buildShotEvidence,
+  getContextEvidence,
+  shotLearningInsights,
 } from "./domain";
 
 describe("local calendar dates", () => {
   it("formats midnight in the user's local calendar rather than UTC", () => {
     const localMidnight = new Date(2026, 8, 22, 0, 30);
     expect(localDateString(localMidnight)).toBe("2026-09-22");
+  });
+});
+
+describe("personal shot learning evidence", () => {
+  const learningRound = (id: string, club: "7i" | "8i", note: string, date = "2026-09-20") => ({
+    id, date, courseName: "Test", courseId: "test-course", tee: "white", overallNote: "", status: "archived" as const,
+    holes: [{ holeNumber: 4, score: 4, focusCategory: "Approach" as const, wentRight: "", wentWrong: "", shots: [{ id: `${id}-shot`, phase: "approach" as const, club, startDistanceToTargetM: 145, endDistanceToTargetM: note === "Hit green" ? 8 : 95, startLie: "fairway" as const, outcomes: [{ outcome: note === "Hit green" ? "good" as const : "bad" as const, note }] }] }],
+  });
+
+  it("preserves structured shot context as derived evidence", () => {
+    const evidence = buildShotEvidence([learningRound("a", "8i", "Too short")]);
+    expect(evidence[0]).toMatchObject({ startDistanceM: 145, endDistanceM: 95, startLie: "fairway", negative: true });
+  });
+
+  it("matches comparable distance and lie while rejecting distant context", () => {
+    const rounds = [learningRound("a", "7i", "Hit green")];
+    expect(getContextEvidence(rounds, { phase: "approach", club: "7i", distanceM: 150, lie: "fairway" })).toHaveLength(1);
+    expect(getContextEvidence(rounds, { phase: "approach", club: "7i", distanceM: 210, lie: "fairway" })).toHaveLength(0);
+    expect(getContextEvidence(rounds, { phase: "approach", club: "7i", distanceM: 150, lie: "bunker" })[0].weight).toBeLessThan(1);
+  });
+
+  it("only surfaces learned findings after repeated evidence", () => {
+    expect(shotLearningInsights([learningRound("a", "8i", "Too short")])).toHaveLength(0);
+    const findings = shotLearningInsights([
+      learningRound("a", "8i", "Too short"),
+      learningRound("b", "8i", "Too short"),
+      learningRound("c", "8i", "Too short"),
+    ]);
+    expect(findings[0]?.text).toContain("8i");
   });
 });
 

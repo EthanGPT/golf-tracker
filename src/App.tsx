@@ -34,6 +34,7 @@ import {
   currentHandicapIndex,
   roundTroubleDetailsByCategory,
   roundTroubleByCategory,
+  shotLearningInsights,
   recentCategoryTroubleStats,
   ensurePuttingShot,
   appendHoleShot,
@@ -1797,6 +1798,7 @@ function Progress({
     .filter((round) => round.status === "archived")
     .sort((a, b) => a.date.localeCompare(b.date));
   const recent = archived.slice(-6);
+  const learningInsights = shotLearningInsights(archived);
   const completed = [
     data.weeklyPlan.practiceAComplete,
     data.weeklyPlan.practiceBComplete,
@@ -1999,6 +2001,24 @@ function Progress({
           })}
         </div>
       </section>
+      {learningInsights.length > 0 && (
+        <section className="panel round-learning-panel">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">LEARNED FROM YOUR ROUNDS</span>
+              <h3>Patterns worth keeping</h3>
+            </div>
+          </div>
+          <div className="round-learning-list">
+            {learningInsights.map((insight) => (
+              <div key={insight.key}>
+                <strong>{insight.text}</strong>
+                <small>{insight.evidence}</small>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
       <section className="panel insights-form-map">
         <div className="section-heading">
           <div>
@@ -2540,6 +2560,8 @@ function RoundMode({
     holePar(holeNumber) === 3
       ? teeAdjustment?.effectiveDistanceM || holeDistance(holeNumber, draft.tee || "white")
       : holeDistance(holeNumber, draft.tee || "white"),
+    rounds,
+    { courseId, holeNumber, tee: draft.tee || "white" },
   );
   const updateHole = (patch: Partial<typeof currentHole>) =>
     setDraft({
@@ -2585,7 +2607,24 @@ function RoundMode({
       );
       const shots = currentHole.shots?.map((shot, shotIndex, allShots) =>
         shotIndex === allShots.length - 1 && validTravel
-          ? { ...shot, actualDistanceM: Math.round(travelDistance) }
+          ? {
+              ...shot,
+              actualDistanceM: Math.round(travelDistance),
+              startDistanceToTargetM: currentHole.latestShotContext?.distanceToTargetM,
+              endDistanceToTargetM: context.distanceToTargetM,
+              startLie: currentHole.latestShotContext?.lie,
+              startPosition: currentHole.latestShotContext?.position,
+              endPosition: context.position,
+            }
+          : shotIndex === allShots.length - 1 && currentHole.latestShotContext
+            ? {
+                ...shot,
+                startDistanceToTargetM: currentHole.latestShotContext.distanceToTargetM,
+                endDistanceToTargetM: context.distanceToTargetM,
+                startLie: currentHole.latestShotContext.lie,
+                startPosition: currentHole.latestShotContext.position,
+                endPosition: context.position,
+              }
           : shot,
       );
       updateHole({ latestShotContext: context, ...(shots ? { shots } : {}) });
@@ -2718,6 +2757,7 @@ function RoundMode({
           holeDistance(holeNumber, draft.tee || "white"),
           currentHole.latestShotContext.position.accuracyM,
           rounds,
+          { courseId, holeNumber, tee: draft.tee || "white" },
         );
         return adaptive.recommendedClub ? (
           <button type="button" className="adaptive-caddie compact-panel" onClick={() => setShowAdaptiveWhy(!showAdaptiveWhy)}>
@@ -2802,7 +2842,7 @@ function RoundMode({
           defaultClub={currentHole.latestShotContext?.lie ? (() => {
             const wind = calculateShotWind(weather, currentHole.latestShotContext!.shotBearingDeg);
             const adjustment = calculateWindAdjustedDistance(currentHole.latestShotContext!.distanceToTargetM, wind);
-            return adaptiveCaddieDecision(readings, bag, currentHole.latestShotContext!.distanceToTargetM, adjustment?.effectiveDistanceM || currentHole.latestShotContext!.distanceToTargetM, currentHole.latestShotContext!.lie, holeDistance(holeNumber, draft.tee || "white"), currentHole.latestShotContext!.position.accuracyM, rounds).recommendedClub;
+              return adaptiveCaddieDecision(readings, bag, currentHole.latestShotContext!.distanceToTargetM, adjustment?.effectiveDistanceM || currentHole.latestShotContext!.distanceToTargetM, currentHole.latestShotContext!.lie, holeDistance(holeNumber, draft.tee || "white"), currentHole.latestShotContext!.position.accuracyM, rounds, { courseId, holeNumber, tee: draft.tee || "white" }).recommendedClub;
           })() : undefined}
           putting={currentHole.onGreen === true}
           par={holePar(holeNumber)}

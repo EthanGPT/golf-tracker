@@ -67,6 +67,12 @@ export type HoleShot = {
   note?: string;
   outcomes?: { outcome: "good" | "bad"; note: string }[];
   actualDistanceM?: number;
+  startDistanceToTargetM?: number;
+  endDistanceToTargetM?: number;
+  startLie?: ShotLie;
+  startPosition?: ShotContext["position"];
+  endPosition?: ShotContext["position"];
+  effectiveDistanceM?: number;
 };
 export type CaddieContext = {
   windSpeed?: number;
@@ -271,6 +277,137 @@ export function getOnCourseClubAdjustment(rounds: Round[], club: ClubName, basel
     }
   }
   return { adjustmentM: adjustment, usableObservations: usable, reason };
+}
+
+export type ShotEvidence = {
+  roundId: string;
+  date: string;
+  courseId?: string;
+  holeNumber: number;
+  tee?: string;
+  phase: ShotPhase;
+  club?: ClubName;
+  startDistanceM?: number;
+  endDistanceM?: number;
+  startLie?: ShotLie;
+  actualDistanceM?: number;
+  positive: boolean;
+  negative: boolean;
+  executionIssue: boolean;
+  notes: string[];
+};
+
+const evidenceNotes = (shot: HoleShot) => [
+  ...(shot.note ? [shot.note] : []),
+  ...(shot.outcomes || []).map((item) => item.note),
+];
+
+export function buildShotEvidence(rounds: Round[]): ShotEvidence[] {
+  return rounds
+    .filter((round) => round.status === "archived")
+    .flatMap((round) => round.holes.flatMap((hole) => (hole.shots || []).map((shot) => {
+      const notes = evidenceNotes(shot);
+      const text = notes.join(" · ").toLowerCase();
+      const executionIssue = /bad contact|thin|fat|topped|mishit|poor contact/.test(text);
+      const positive = /hit green|good distance|good contact|good direction|good approach|good read|good speed|playable/.test(text) || (!notes.length && shot.endDistanceToTargetM !== undefined && shot.startDistanceToTargetM !== undefined && shot.endDistanceToTargetM < shot.startDistanceToTargetM * 0.25);
+      const negative = /too short|too long|poor direction|poor lie|wrong club|three-putt|missed|bad read|bad speed/.test(text) || (!executionIssue && /bad/.test(text));
+      return {
+        roundId: round.id,
+        date: round.archivedAt || round.date,
+        courseId: round.courseId,
+        holeNumber: hole.holeNumber,
+        tee: round.tee,
+        phase: shot.phase,
+        club: shot.club,
+        startDistanceM: shot.startDistanceToTargetM,
+        endDistanceM: shot.endDistanceToTargetM,
+        startLie: shot.startLie,
+        actualDistanceM: shot.actualDistanceM,
+        positive,
+        negative,
+        executionIssue,
+        notes,
+      };
+    })));
+}
+
+export function getContextEvidence(rounds: Round[], input: {
+  phase: ShotPhase;
+  club?: ClubName;
+  distanceM?: number;
+  lie?: ShotLie;
+  courseId?: string;
+  holeNumber?: number;
+  tee?: string;
+}) {
+  const distanceToleranceM = 12;
+  return buildShotEvidence(rounds)
+    .filter((item) => item.phase === input.phase && (!input.club || item.club === input.club))
+    .map((item) => {
+      let weight = 1;
+      if (input.courseId && item.courseId === input.courseId) weight += 1.5;
+      if (input.holeNumber !== undefined && item.holeNumber === input.holeNumber) weight += 2;
+      if (input.tee && item.tee === input.tee) weight += 0.5;
+      if (input.lie && item.startLie === input.lie) weight += 1;
+      else if (input.lie && item.startLie && item.startLie !== input.lie) weight *= 0.25;
+      if (input.distanceM !== undefined && item.startDistanceM !== undefined) {
+        const distance = Math.abs(item.startDistanceM - input.distanceM);
+        if (distance > distanceToleranceM * 3) return null;
+        weight *= Math.max(0.25, 1 - distance / (distanceToleranceM * 3));
+      }
+      const ageDays = Math.max(0, (Date.now() - Date.parse(item.date)) / 86400000);
+      weight *= Math.pow(0.995, ageDays);
+      return { ...item, weight };
+    })
+    .filter((item): item is ShotEvidence & { weight: number } => item !== null);
+}
+
+export function getClubContextEvidence(rounds: Round[], input: Omit<Parameters<typeof getContextEvidence>[1], "club"> & { club: ClubName }) {
+  return getContextEvidence(rounds, input);
+}
+
+export type ShotLearningInsight = {
+  key: string;
+  text: string;
+  evidence: string;
+  strength: number;
+};
+
+export function shotLearningInsights(rounds: Round[]): ShotLearningInsight[] {
+  const evidence = buildShotEvidence(rounds);
+  const insights: ShotLearningInsight[] = [];
+  const approachGroups = new Map<string, typeof evidence>();
+  for (const item of evidence) {
+    if (item.phase !== "approach" || !item.club || item.startDistanceM === undefined) continue;
+    const bucket = Math.floor(item.startDistanceM / 15) * 15;
+    const key = `${item.club}|${bucket}|${item.startLie || "unknown"}`;
+    approachGroups.set(key, [...(approachGroups.get(key) || []), item]);
+  }
+  for (const [key, items] of approachGroups) {
+    if (items.length < 3) continue;
+    const [club, bucket, lie] = key.split("|");
+    const negative = items.filter((item) => item.negative && !item.executionIssue).length;
+    const positive = items.filter((item) => item.positive).length;
+    if (negative >= 3 && negative >= positive) {
+      insights.push({ key: `approach-short-${key}`, text: `${club} tends to struggle from ${bucket}–${Number(bucket) + 15}m`, evidence: `${negative} of ${items.length} comparable ${lie} approaches were negative.`, strength: negative / items.length });
+    } else if (positive >= 3 && positive > negative) {
+      insights.push({ key: `approach-strong-${key}`, text: `${club} has been strong from ${bucket}–${Number(bucket) + 15}m`, evidence: `${positive} of ${items.length} comparable ${lie} approaches were positive.`, strength: positive / items.length });
+    }
+  }
+  const teeGroups = new Map<string, typeof evidence>();
+  for (const item of evidence) {
+    if (item.phase !== "tee" || !item.club || !item.courseId) continue;
+    const key = `${item.courseId}|${item.holeNumber}|${item.tee || "default"}|${item.club}`;
+    teeGroups.set(key, [...(teeGroups.get(key) || []), item]);
+  }
+  for (const [key, items] of teeGroups) {
+    if (items.length < 3) continue;
+    const [course, hole, tee, club] = key.split("|");
+    const positive = items.filter((item) => item.positive).length;
+    const negative = items.filter((item) => item.negative).length;
+    if (positive >= 3 && positive > negative) insights.push({ key: `tee-${key}`, text: `${club} has been reliable on hole ${hole}`, evidence: `${positive}/${items.length} positive results from ${course} (${tee} tees).`, strength: positive / items.length });
+  }
+  return insights.sort((a, b) => b.strength - a.strength).slice(0, 5);
 }
 
 export function formMapCategoryStats(rounds: Round[], parForHole: (holeNumber: number) => number = () => 0) {
@@ -802,12 +939,29 @@ export function caddieDecision(
   };
 }
 
-export function resolveTeeDecision(readings: RangeReading[], par: number, targetDistance: number) {
+export function resolveTeeDecision(
+  readings: RangeReading[],
+  par: number,
+  targetDistance: number,
+  rounds: Round[] = [],
+  context?: { courseId?: string; holeNumber?: number; tee?: string },
+) {
   const plan = caddiePlan(readings, par, targetDistance);
   if (!plan) return undefined;
   const explanation = caddieDecision(readings, par, targetDistance);
+  const teeCandidates = [...new Set([plan.tee.club, "Dr", "3W", "4W-Hybrid"] as ClubName[])]
+    .filter((club) => clubSummary(readings, club).typical !== undefined && isTeeTargetReachable(readings, club, targetDistance));
+  const learned = teeCandidates.map((club) => {
+    const evidence = getContextEvidence(rounds, { phase: "tee", club, ...context });
+    const weight = evidence.reduce((sum, item) => sum + item.weight, 0);
+    const positive = evidence.reduce((sum, item) => sum + (item.positive ? item.weight : 0), 0);
+    const negative = evidence.reduce((sum, item) => sum + (item.negative ? item.weight : 0), 0);
+    return { club, weight, score: weight >= 2 ? ((positive - negative) / weight) * Math.min(1, weight / 6) : 0 };
+  });
+  const learnedBest = learned.filter((item) => item.weight >= 2).sort((a, b) => b.score - a.score)[0];
+  const selectedClub = learnedBest && learnedBest.score > 0 ? learnedBest.club : plan.tee.club;
   return {
-    club: par === 3 ? explanation?.primaryClub || plan.sequence[0]?.club || plan.tee.club : plan.tee.club,
+    club: par === 3 ? explanation?.primaryClub || plan.sequence[0]?.club || selectedClub : selectedClub,
     plan,
     explanation,
   };
@@ -863,6 +1017,7 @@ export function adaptiveCaddieDecision(
   officialHoleDistanceM?: number,
   gpsAccuracyM?: number,
   rounds: Round[] = [],
+  learningContext?: { courseId?: string; holeNumber?: number; tee?: string },
 ): AdaptiveCaddieDecision {
   if (!isValidGolfShotContext(targetDistanceM, officialHoleDistanceM, gpsAccuracyM)) {
     const fallback = safeRecoveryClub(readings, bag);
@@ -911,6 +1066,17 @@ export function adaptiveCaddieDecision(
       const carry = summary.typical;
       const suitability = lieSuitability(club, lie);
       const onCourse = getOnCourseClubAdjustment(rounds, club, carry);
+      const learned = getContextEvidence(rounds, {
+        phase: lie === "tee" ? "tee" : "approach",
+        club,
+        distanceM: effectiveDistanceM,
+        lie,
+        ...learningContext,
+      });
+      const learnedWeight = learned.reduce((sum, item) => sum + item.weight, 0);
+      const learnedPositive = learned.reduce((sum, item) => sum + (item.positive ? item.weight : 0), 0);
+      const learnedNegative = learned.reduce((sum, item) => sum + (item.negative ? item.weight : 0), 0);
+      const contextualScore = learnedWeight >= 1 ? Math.max(-0.18, Math.min(0.18, ((learnedPositive - learnedNegative) / learnedWeight) * Math.min(1, learnedWeight / 6))) : 0;
       const excluded = !carry || suitability === 0;
       if (excluded) return { club, carryM: carry, lieSuitability: suitability, excluded: true, exclusionReason: !carry ? "No carry data" : "Not suitable from this lie" };
       const gap = Math.abs(carry - (effectiveDistanceM + onCourse.adjustmentM));
@@ -919,7 +1085,7 @@ export function adaptiveCaddieDecision(
       const severe = summary.severeMissPercentage === undefined ? 0.15 : summary.severeMissPercentage / 100;
       const reliability = Math.min(1, summary.readings.length / 10);
       const shortPreference = carry > effectiveDistanceM ? ADAPTIVE_CADDIE_V1.shortBias : 0;
-      const utility = fit * ADAPTIVE_CADDIE_V1.distanceFitWeight + playable * ADAPTIVE_CADDIE_V1.playableWeight - severe * ADAPTIVE_CADDIE_V1.severeMissPenalty + reliability * ADAPTIVE_CADDIE_V1.reliabilityWeight + suitability * 0.15 - shortPreference;
+      const utility = fit * ADAPTIVE_CADDIE_V1.distanceFitWeight + playable * ADAPTIVE_CADDIE_V1.playableWeight - severe * ADAPTIVE_CADDIE_V1.severeMissPenalty + reliability * ADAPTIVE_CADDIE_V1.reliabilityWeight + suitability * 0.15 - shortPreference + contextualScore;
       return { club, carryM: carry, distanceGapM: gap, distanceFitScore: fit, playableRate: playable, severeMissRate: severe, lieSuitability: suitability, reliabilityScore: reliability, utility, ...(onCourse.adjustmentM ? { adjustmentM: onCourse.adjustmentM } : {}) };
     });
   const usable = candidates.filter((candidate) => !candidate.excluded).sort((a, b) => (b.utility || -Infinity) - (a.utility || -Infinity));
@@ -1124,6 +1290,20 @@ export function practicePriorities(
       current.impact += Math.max(1, shot.score - 4);
       groups.set(key, current);
     });
+  const learnedWeaknesses = new Map<string, { phase: ShotPhase; club?: ClubName; outcome: string; count: number; impact: number }>();
+  buildShotEvidence(recent).forEach((shot) => {
+    if (!shot.club || !shot.negative || shot.executionIssue || shot.startDistanceM === undefined) return;
+    const bucket = Math.floor(shot.startDistanceM / 15) * 15;
+    const key = `${shot.phase}|${shot.club}|${bucket}`;
+    const current = learnedWeaknesses.get(key) || { phase: shot.phase, club: shot.club, outcome: `distance control from ${bucket}–${bucket + 15}m`, count: 0, impact: 0 };
+    current.count += 1;
+    current.impact += 1;
+    learnedWeaknesses.set(key, current);
+  });
+  learnedWeaknesses.forEach((item, key) => {
+    if (item.count < 3 || groups.has(key)) return;
+    groups.set(key, item);
+  });
   const legacyPhase: Record<RoundCategory, ShotPhase> = {
     drive: "tee",
     wood: "tee",
