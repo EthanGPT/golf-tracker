@@ -121,9 +121,15 @@ const emptyHole = (holeNumber: number): RoundHole => ({
 function App() {
   const [data, setData] = useState<AppData | null>(() => loadLocalData());
   const [session, setSession] = useState<Session | null>(null);
+  const [guestMode, setGuestMode] = useState(false);
+  const guestModeRef = useRef(false);
   const [authReady, setAuthReady] = useState(false);
   const [cloudError, setCloudError] = useState("");
   const [dataReady, setDataReady] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [guide, setGuide] = useState<"range" | "round" | null>(null);
+  const rangeGuideSeenRef = useRef(false);
+  const roundGuideSeenRef = useRef(false);
   const cloudReadySessionRef = useRef<string | null>(null);
   const [screen, setScreen] = useState<Screen>(
     () =>
@@ -224,8 +230,9 @@ function App() {
       });
     const { data: listener } = supabase.auth.onAuthStateChange(
       (event, authSession) => {
+        if (guestModeRef.current) return;
         setSession(authSession);
-        if (event === "SIGNED_OUT") {
+        if (event === "SIGNED_OUT" && !guestModeRef.current) {
           setData(null);
           setDataReady(false);
         }
@@ -263,6 +270,7 @@ function App() {
         setData(reconciled);
         cloudReadySessionRef.current = session.user.id;
         setDataReady(true);
+        setShowOnboarding(localStorage.getItem(`golf-tracker-onboarding-${session.user.id}`) !== "complete");
       }
     })().catch((error) => {
       if (!cancelled)
@@ -277,7 +285,7 @@ function App() {
     };
   }, [authReady, session]);
   useEffect(() => {
-    if (!data || !dataReady || !session || cloudReadySessionRef.current !== session.user.id) return;
+    if (guestMode || !data || !dataReady || !session || cloudReadySessionRef.current !== session.user.id) return;
     saveCloudData(session, data)
       .then(() => markSyncPending(false))
       .catch((error) => {
@@ -329,10 +337,36 @@ function App() {
         </small>
       </div>
     );
-  if (isCloudConfigured && !session && !data) return <AuthScreen />;
+  if (isCloudConfigured && !session && !guestMode) return <AuthScreen onGuest={() => { guestModeRef.current = true; setGuestMode(true); setSession(null); const guestData = seedData(); guestData.readings = []; guestData.rounds = []; guestData.handicapHistory = []; localStorage.removeItem("golf-tracker-round-draft"); saveLocalData(guestData); setData(guestData); setDataReady(true); setShowOnboarding(true); void supabase?.auth.signOut(); }} />;
   if (!data) return <div className="loading">Loading your notebook...</div>;
+  if ((session || guestMode) && showOnboarding)
+    return (
+      <Onboarding
+        data={data}
+        updateData={(change) => setData((current) => (current ? change(current) : current))}
+        finish={() => {
+          if (session) localStorage.setItem(`golf-tracker-onboarding-${session.user.id}`, "complete");
+          setShowOnboarding(false);
+          setScreen("today");
+        }}
+      />
+    );
   const updateData = (change: (current: AppData) => AppData) =>
     setData((current) => (current ? change(current) : current));
+  const showGuide = (kind: "range" | "round") => {
+    if (kind === "range" && rangeGuideSeenRef.current) return;
+    if (kind === "round" && roundGuideSeenRef.current) return;
+    const hasArchivedRound = data.rounds.some((round) => round.status === "archived");
+    const shouldShow = (kind === "range" && data.readings.filter((reading) => reading.playable !== false && !reading.severeMiss).length === 0) || (kind === "round" && !hasArchivedRound);
+    if (shouldShow) {
+      if (kind === "range") rangeGuideSeenRef.current = true;
+      if (kind === "round") roundGuideSeenRef.current = true;
+      setGuide(kind);
+    }
+  };
+  const dismissGuide = () => {
+    setGuide(null);
+  };
   const addReading = () => {
     const value = Number(distanceInput);
     if (!value || value <= 0) return;
@@ -399,10 +433,9 @@ function App() {
   };
   const saveHole = (submittedHole?: RoundHole) => {
     if (!roundDraft) return null;
-    const sequence = HERMANUS_LOOPS[roundDraft.loop || "east"].slice(
-      0,
-      roundDraft.roundLength || 9,
-    );
+    const sequence = roundDraft.courseId && roundDraft.courseId !== "hermanus-golf-club"
+      ? (getCourse(roundDraft.courseId)?.holes.map((hole) => hole.number) || []).slice(0, roundDraft.roundLength || 9)
+      : HERMANUS_LOOPS[roundDraft.loop || "east"].slice(0, roundDraft.roundLength || 9);
     const holeNumber =
       submittedHole?.holeNumber ||
       sequence[Math.min(roundDraft.holes.length, sequence.length - 1)];
@@ -572,7 +605,7 @@ function App() {
     <div className="app-shell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">GOLF TRACKER</p>
+          <p className="eyebrow">MYCADDIE</p>
           <h1>{screenTitle}</h1>
         </div>
         <button
@@ -645,7 +678,7 @@ function App() {
           <Progress data={data} recommendation={rec} updatePlan={updatePlan} focusRoundId={completedRoundId} latestHandicap={currentHandicap} updateRound={(round) => updateData((current) => ({ ...current, rounds: current.rounds.map((item) => item.id === round.id ? round : item) }))} />
         )}
         {screen === "settings" && (
-          <Settings data={data} updateData={updateData} />
+          <Settings data={data} updateData={updateData} signOut={() => { guestModeRef.current = false; setGuestMode(false); setSession(null); setData(null); setDataReady(false); setShowOnboarding(false); void supabase?.auth.signOut(); }} />
         )}
       </main>
       <nav className="bottom-nav">
@@ -655,6 +688,8 @@ function App() {
             className={screen === id ? "active" : ""}
             onClick={() => {
               if (id === "round" && !roundHasStarted) setRoundSetupOpen(true);
+              if (id === "range" || id === "distances") showGuide("range");
+              if (id === "round") showGuide("round");
               setScreen(id);
             }}
           >
@@ -663,11 +698,26 @@ function App() {
           </button>
         ))}
       </nav>
+      {guide && <CoachGuide kind={guide} dismiss={dismissGuide} />}
     </div>
   );
 }
 
-function AuthScreen() {
+function CoachGuide({ kind, dismiss }: { kind: "range" | "round"; dismiss: () => void }) {
+  const range = kind === "range";
+  const roundSteps = <><div><b>1</b><span>MyCaddie tells you the best club for this specific hole</span></div><div><b>2</b><span>Tap Next Shot at your ball and confirm the lie</span></div><div><b>3</b><span>MyCaddie adjusts for wind and your data, then gives you the next club</span></div><div><b>4</b><span>Repeat, enter your score, and save the hole</span></div></>;
+  return <div className="guide-overlay" onClick={dismiss}>
+    <div className="guide-card" onClick={(event) => event.stopPropagation()}>
+      <span className="guide-kicker">{range ? "START HERE" : "ON-COURSE CADDIE"}</span>
+      <h2>{range ? "Build your club numbers" : "Play with your data"}</h2>
+      <div className="guide-steps">{range ? <><div><b>1</b><span>Enter the carry distance</span></div><div><b>2</b><span>Mark playable or severe miss (OB)</span></div><div><b>3</b><span>Build at least five usable shots for better tips</span></div></> : roundSteps}</div>
+      <div className="guide-demo"><span className="guide-cursor">↗</span><strong>{range ? "Tap Range" : "Tap Next Shot"}</strong><small>{range ? "Your distances power every recommendation" : "MyCaddie handles the decision at the ball"}</small></div>
+      <button className="primary-button" onClick={dismiss}>Got it</button>
+    </div>
+  </div>;
+}
+
+function AuthScreen({ onGuest }: { onGuest: () => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [notice, setNotice] = useState("");
@@ -697,15 +747,41 @@ function AuthScreen() {
     );
   };
 
+  const [mode, setMode] = useState<"landing" | "auth">("landing");
+  if (mode === "landing") return (
+    <div className="landing-screen">
+      <div className="landing-main">
+        <div className="landing-copy">
+          <span className="tag">MYCADDIE</span>
+          <h1>Your personal golf caddie, powered by your data.</h1>
+          <p>MyCaddie learns your game and recommends the right shot, hole by hole.</p>
+          <button className="primary-button landing-cta" onClick={() => setMode("auth")}>Get started <ChevronRight size={17} /></button>
+          <button className="landing-login" onClick={() => setMode("auth")}>Already have an account? <strong>Sign in</strong></button>
+        </div>
+        <div className="landing-preview" aria-label="MyCaddie tee recommendation preview">
+          <div className="preview-top"><span>HOLE 4</span><span>PAR 4</span><strong>362m</strong></div>
+          <div className="preview-label">TEE</div>
+          <div className="preview-club"><strong>3 WOOD</strong><span>BEST CLUB</span></div>
+          <div className="preview-divider" />
+          <div className="preview-data-grid">
+            <div><span>YOUR CARRY</span><strong>214m</strong></div>
+            <div><span>PLAYABLE RATE</span><strong>82%</strong></div>
+            <div><span>MISS RISK</span><strong>LOW</strong></div>
+            <div><span>WIND ADJUSTMENT</span><strong>+8m</strong></div>
+          </div>
+          <div className="preview-foot"><span className="preview-dot" />Recommendation built from your game data</div>
+        </div>
+      </div>
+      <div className="landing-proof"><span>Know your distances</span><span>Plan every hole</span><span>Learn from every round</span></div>
+    </div>
+  );
   return (
     <div className="auth-screen">
       <div className="auth-card">
-        <span className="tag">GOLF TRACKER</span>
-        <h2>Sign in to your distances.</h2>
-        <p>
-          Use the same account on your phone and computer. Your rows are
-          protected by Supabase RLS.
-        </p>
+        <button className="back-link" onClick={() => setMode("landing")}>← Back</button>
+        <span className="tag">MYCADDIE</span>
+        <h2>Bring your game data with you.</h2>
+        <p>Sign in to keep your distances, rounds, and progress synced across devices.</p>
         <form onSubmit={signIn}>
           <label>
             Email
@@ -735,10 +811,79 @@ function AuthScreen() {
         <button className="text-button" onClick={signUp} disabled={busy}>
           Create account
         </button>
+        <button className="guest-button" onClick={onGuest} disabled={busy}>
+          Continue without an account
+        </button>
         {notice && <p className="notice">{notice}</p>}
       </div>
     </div>
   );
+}
+
+function Onboarding({
+  data,
+  updateData,
+  finish,
+}: {
+  data: AppData;
+  updateData: (change: (current: AppData) => AppData) => void;
+  finish: () => void;
+}) {
+  const [step, setStep] = useState(0);
+  const [handicap, setHandicap] = useState(String(currentHandicapIndex(data.handicapHistory) ?? ""));
+  const [preferredTee, setPreferredTee] = useState(data.preferredTee || "white");
+  const [practicePeriod, setPracticePeriod] = useState<"week" | "month">(data.practicePeriod || "week");
+  const [knowsDistances, setKnowsDistances] = useState<boolean | null>(null);
+  const [homeClub, setHomeClub] = useState(data.homeCourseName || "");
+  const [customClub, setCustomClub] = useState("");
+  const [distanceInputs, setDistanceInputs] = useState<Record<string, string>>({});
+  const teeOptions = homeClub === "Hartford Golf Club"
+    ? ["white", "green", "orange", "purple", "blue"]
+    : ["red", "blue", "white", "yellow", "black"];
+  const baseClubs = [...new Set([...CLUBS, "5W", "Putter", "2i", "3i", "4i"])] as ClubName[];
+  const bag = data.bag || baseClubs;
+  const onboardingClubOrder = ["Dr", "3W", "4W-Hybrid", "5W", "2i", "3i", "4i", "5i", "6i", "7i", "8i", "9i", "PW", "SW", "Putter"];
+  const orderedBag = [...bag].sort((a, b) => {
+    const ai = onboardingClubOrder.indexOf(a);
+    const bi = onboardingClubOrder.indexOf(b);
+    return (ai < 0 ? onboardingClubOrder.length : ai) - (bi < 0 ? onboardingClubOrder.length : bi);
+  });
+  useEffect(() => {
+    const normalizedBag = [...new Set([...(data.bag || []), ...baseClubs])];
+    if (!data.bag || normalizedBag.length !== data.bag.length) updateData((current) => ({ ...current, bag: normalizedBag }));
+  }, []);
+  const setFrequency = (key: "roundsPerWeek" | "practiceSessionsPerWeek", value: number) => updateData((current) => ({ ...current, practiceFrequency: { roundsPerWeek: current.practiceFrequency?.roundsPerWeek ?? 1, practiceSessionsPerWeek: current.practiceFrequency?.practiceSessionsPerWeek ?? 2, [key]: value } }));
+  const saveHandicap = () => {
+    const value = Number(handicap);
+    if (Number.isFinite(value) && value >= 0 && value <= 54)
+      updateData((current) => ({ ...current, handicapHistory: [...current.handicapHistory, { id: crypto.randomUUID(), date: localDateString(), index: value }] }));
+  };
+  const toggleClub = (club: ClubName) => updateData((current) => ({ ...current, bag: (current.bag || bag).includes(club) ? (current.bag || bag).filter((item) => item !== club) : [...(current.bag || bag), club] }));
+  const next = () => {
+    if (step === 0 && homeClub) updateData((current) => ({ ...current, homeCourseId: homeClub.toLowerCase().replace(/\s+/g, "-"), homeCourseName: homeClub }));
+    if (step === 2) saveHandicap();
+    if (step === 3) updateData((current) => ({ ...current, practicePeriod }));
+    if (step === 4 && knowsDistances === true) return setStep(5);
+    if (step === 4) return finish();
+    if (step === 5) {
+      updateData((current) => ({ ...current, readings: [...current.readings, ...Object.entries(distanceInputs).filter(([, value]) => /^\d+(\.\d+)?$/.test(value)).map(([club, value]) => ({ id: crypto.randomUUID(), club, distanceMetres: Math.round(Number(value)), mishit: false, playable: true, severeMiss: false, sessionDate: localDateString(), createdAt: new Date().toISOString() }))] }));
+      return finish();
+    }
+    if (step === 1) updateData((current) => ({ ...current, preferredTee }));
+    setStep((current) => current + 1);
+  };
+  const totalSteps = 5;
+  return <div className="onboarding-screen">
+    <div className="onboarding-top"><span className="tag">MYCADDIE</span><span>{step + 1} / {totalSteps}</span></div>
+    <div className="onboarding-progress"><i style={{ width: `${((step + 1) / totalSteps) * 100}%` }} /></div>
+    {step === 0 && <div className="onboarding-step"><span className="eyebrow">FIRST, YOUR HOME BASE</span><h1>Where do you<br /><em>play most?</em></h1><p>Choose your home club, or skip this for now and add it later in Settings.</p><label className="search-field"><span>HOME CLUB</span><select className="club-select" value={homeClub} onChange={(event) => setHomeClub(event.target.value)}><option value="">Choose a Club</option><option value="Hermanus Golf Club">Hermanus Golf Club</option><option value="Arabella Golf Club">Arabella Golf Club</option><option value="Hartford Golf Club">Hartford Golf Club</option><option value="Zimbali Lakes">Zimbali Lakes</option><option value="Simbithi Country Club">Simbithi Country Club</option></select></label><button className="skip-link" onClick={() => { setHomeClub(""); updateData((current) => ({ ...current, homeCourseId: undefined, homeCourseName: undefined })); setStep(1); }}>Skip for now</button></div>}
+    {step === 1 && <div className="onboarding-step"><span className="eyebrow">YOUR PREFERENCE</span><h1>Which tees do you<br /><em>usually play?</em></h1><p>We’ll use this for round setup and hole strategy.</p><div className="tee-choices">{teeOptions.map((tee) => <button key={tee} className={preferredTee === tee ? "selected" : ""} onClick={() => setPreferredTee(tee)}><span className={`tee-dot ${tee}`} />{tee[0].toUpperCase() + tee.slice(1)}{preferredTee === tee && <Check size={17} />}</button>)}</div></div>}
+    {step === 2 && <div className="onboarding-step"><span className="eyebrow">YOUR STARTING POINT</span><h1>What’s your<br /><em>handicap index?</em></h1><p>This helps us put your practice and progress in context.</p><label className="big-input"><input autoFocus type="text" inputMode="decimal" pattern="[0-9.]*" value={handicap} onChange={(event) => setHandicap(event.target.value.replace(/[^0-9.]/g, ""))} placeholder="16.5" /><span>INDEX</span></label><button className="skip-link" onClick={() => { setHandicap(""); setStep(3); }}>I don’t know it yet</button></div>}
+    {step === 3 && <div className="onboarding-step"><span className="eyebrow">YOUR RHYTHM</span><h1>How do you want<br /><em>to play?</em></h1><p>Keep it realistic. MyCaddie works just as well for occasional golfers as it does for regulars.</p><div className="period-toggle"><button className={practicePeriod === "week" ? "selected" : ""} onClick={() => setPracticePeriod("week")}>Per week</button><button className={practicePeriod === "month" ? "selected" : ""} onClick={() => setPracticePeriod("month")}>Per month</button></div><div className="onboarding-card"><span>Rounds {practicePeriod === "week" ? "per week" : "per month"}</span><input className="onboarding-number" type="text" inputMode="numeric" pattern="[0-9]*" value={data.practiceFrequency?.roundsPerWeek ?? 1} onChange={(event) => setFrequency("roundsPerWeek", Math.max(0, Math.min(practicePeriod === "week" ? 7 : 20, Number(event.target.value.replace(/[^0-9]/g, "")) || 0)))} /></div><div className="onboarding-card"><span>Practice sessions {practicePeriod === "week" ? "per week" : "per month"}</span><input className="onboarding-number" type="text" inputMode="numeric" pattern="[0-9]*" value={data.practiceFrequency?.practiceSessionsPerWeek ?? 2} onChange={(event) => setFrequency("practiceSessionsPerWeek", Math.max(0, Math.min(practicePeriod === "week" ? 14 : 40, Number(event.target.value.replace(/[^0-9]/g, "")) || 0)))} /></div></div>}
+    {step === 4 && <div className="onboarding-step"><span className="eyebrow">MAKE IT PERSONAL</span><h1>What’s in<br /><em>your bag?</em></h1><p>Start with the clubs you carry. Tap to remove or add individual clubs.</p><div className="onboarding-bag">{orderedBag.map((club) => <button key={club} className="selected" onClick={() => toggleClub(club)}>{clubDisplayLabel(club)}<Check size={14} /></button>)}</div><div className="add-club-row"><input value={customClub} placeholder="Add any club" onChange={(event) => setCustomClub(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); const club = customClub.trim(); if (club) { updateData((current) => ({ ...current, bag: [...new Set([...(current.bag || []), club])] })); setCustomClub(""); } } }} /><button onClick={() => { const club = customClub.trim(); if (club) { updateData((current) => ({ ...current, bag: [...new Set([...(current.bag || []), club])] })); setCustomClub(""); } }}>Add club</button></div><div className="distance-question"><strong>Do you know your club distances?</strong><div><button className={knowsDistances === true ? "selected" : ""} onClick={() => { setKnowsDistances(true); updateData((current) => ({ ...current, preferredTee })); setStep(5); }}>Yes, let’s add them</button><button className={knowsDistances === false ? "selected" : ""} onClick={() => { setKnowsDistances(false); updateData((current) => ({ ...current, preferredTee })); finish(); }}>Not yet</button></div></div></div>}
+    {step === 5 && <div className="onboarding-step distance-onboarding-step"><span className="unit-badge">METRES</span><span className="eyebrow">YOUR NUMBERS</span><h1>What does each<br /><em>club carry?</em></h1><p>Enter your typical carry in metres. You can fill in the rest later.</p><div className="distance-entry-list">{orderedBag.filter((club) => club !== "Putter").map((club) => <label key={club}><span>{clubDisplayLabel(club)}</span><input type="text" inputMode="decimal" pattern="[0-9.]*" placeholder="—" value={distanceInputs[club] || ""} onChange={(event) => setDistanceInputs((current) => ({ ...current, [club]: event.target.value.replace(/[^0-9.]/g, "") }))} /></label>)}</div></div>}
+    <div className="onboarding-footer"><button className="primary-button" onClick={next}>{step === 5 ? "Save distances" : step === 4 && knowsDistances === true ? "Add distances" : step === 4 ? "Open my tracker" : "Continue"} <ChevronRight size={17} /></button>{step > 0 && <button className="back-link" onClick={() => setStep((current) => current - 1)}>Back</button>}</div>
+  </div>;
 }
 
 function Today({
@@ -791,8 +936,8 @@ function Today({
   ].filter(Boolean).length;
   const fallbackPractice = [
     [
-      "Standard range session",
-      "Record carry, playable and severe-miss outcomes.",
+      data.readings.length === 0 ? "Hit the range" : "Standard range session",
+      data.readings.length === 0 ? "Record carry, playable and severe-miss outcomes." : "Record carry, playable and severe-miss outcomes.",
     ],
     ["Putting session", "Work on pace and first-putt distance control."],
     ["Short-game session", "Build touch around the green."],
@@ -889,7 +1034,7 @@ function Today({
       <section className="panel weekly">
         <div className="section-heading">
           <div>
-            <span className="eyebrow">THIS WEEK</span>
+            <span className="eyebrow">{data.practicePeriod === "month" ? "THIS MONTH" : "THIS WEEK"}</span>
             <h3>
               {week} of{" "}
               {(data.practiceFrequency?.practiceSessionsPerWeek ?? 2) +
@@ -987,6 +1132,12 @@ function Range({
   const [clubPickerOpen, setClubPickerOpen] = useState(false);
   const summary = clubSummary(data.readings, selectedClub);
   const bag = data.bag?.length ? data.bag : CLUBS;
+  const rangeOrder = ["Dr", "3W", "5W", "4W-Hybrid", "2i", "3i", "4i", "5i", "6i", "7i", "8i", "9i", "PW", "SW"];
+  const orderedBag = [...bag].filter((club) => club !== "Putter").sort((a, b) => {
+    const ai = rangeOrder.indexOf(a);
+    const bi = rangeOrder.indexOf(b);
+    return (ai < 0 ? rangeOrder.length : ai) - (bi < 0 ? rangeOrder.length : bi);
+  });
   return (
     <div className="stack fade-in range-screen">
       <section className="screen-lead">
@@ -1038,7 +1189,7 @@ function Range({
               </button>
             </div>
             <div className="bag-picker-grid">
-              {bag.map((club) => (
+              {orderedBag.map((club) => (
                 <button
                   key={club}
                   className={selectedClub === club ? "selected" : ""}
@@ -1454,9 +1605,11 @@ export function LegacyClubFormPanel({
 function Settings({
   data,
   updateData,
+  signOut,
 }: {
   data: AppData;
   updateData: (change: (current: AppData) => AppData) => void;
+  signOut: () => void;
 }) {
   const [handicapInput, setHandicapInput] = useState("");
   const [customClub, setCustomClub] = useState("");
@@ -1466,6 +1619,7 @@ function Settings({
   >(null);
   const bag = data.bag || [...CLUBS, "Putter"];
   const available = [...new Set([...CLUBS, "5W", "Putter", "2i", "3i", "4i"])];
+  const preferredTees = getCourse(data.homeCourseId || "hermanus-golf-club")?.tees || [];
   const toggleClub = (club: string) =>
     updateData((current) => ({
       ...current,
@@ -1525,7 +1679,7 @@ function Settings({
             onClick={() => setSettingsEditor("course")}
           >
             <span>Home course</span>
-            <strong>{data.homeCourseName || "Hermanus Golf Club"}</strong>
+            <strong>{data.homeCourseName || "Not set"}</strong>
             <ChevronRight size={16} />
           </button>
           <button
@@ -1558,10 +1712,10 @@ function Settings({
         </div>
       </section>
       <section className="settings-group">
-        <span className="eyebrow">WEEKLY PLAN</span>
+        <span className="eyebrow">{data.practicePeriod === "month" ? "MONTHLY PLAN" : "WEEKLY PLAN"}</span>
         <div className="panel settings-panel">
           <label className="settings-field">
-            Rounds per week
+            Rounds per {data.practicePeriod === "month" ? "month" : "week"}
             <span className="stepper">
               <button
                 onClick={() =>
@@ -1593,7 +1747,7 @@ function Settings({
             </span>
           </label>
           <label className="settings-field">
-            Practice sessions per week
+            Practice sessions per {data.practicePeriod === "month" ? "month" : "week"}
             <span className="stepper">
               <button
                 onClick={() =>
@@ -1679,6 +1833,15 @@ function Settings({
           )}
         </div>
       </section>
+      {supabase && (
+        <section className="settings-group account-settings">
+          <span className="eyebrow">ACCOUNT</span>
+          <div className="panel settings-panel">
+            <button className="signout-button" onClick={signOut}>Sign out</button>
+            <p className="settings-help">Sign out to test onboarding with another account.</p>
+          </div>
+        </section>
+      )}
       {settingsEditor && (
         <div
           className="settings-sheet-overlay"
@@ -1703,25 +1866,53 @@ function Settings({
                 >
                   Hermanus Golf Club
                 </button>
+                <button
+                  onClick={() => {
+                    updateData((current) => ({
+                      ...current,
+                      homeCourseId: "arabella-golf-club",
+                      homeCourseName: "Arabella Golf Club",
+                    }));
+                    setSettingsEditor(null);
+                  }}
+                >
+                  Arabella Golf Club
+                </button>
+                <button
+                  onClick={() => {
+                    updateData((current) => ({ ...current, homeCourseId: "hartford-golf-club", homeCourseName: "Hartford Golf Club" }));
+                    setSettingsEditor(null);
+                  }}
+                >
+                  Hartford Golf Club
+                </button>
+                {(["Zimbali Lakes", "Simbithi Country Club"] as const).map((courseName) => (
+                  <button key={courseName} onClick={() => {
+                    updateData((current) => ({ ...current, homeCourseId: courseName === "Zimbali Lakes" ? "zimbali-lakes" : "simbithi-country-club", homeCourseName: courseName }));
+                    setSettingsEditor(null);
+                  }}>{courseName}</button>
+                ))}
               </>
             )}
             {settingsEditor === "tee" && (
               <>
                 <h3>Preferred tees</h3>
-                {(["white", "yellow", "red"] as const).map((tee) => (
-                  <button
-                    key={tee}
-                    onClick={() => {
-                      updateData((current) => ({
-                        ...current,
-                        preferredTee: tee,
-                      }));
-                      setSettingsEditor(null);
-                    }}
-                  >
-                    {tee[0].toUpperCase() + tee.slice(1)}
-                  </button>
-                ))}
+                <div className="tee-choices settings-tee-choices">
+                  {preferredTees.map((tee) => (
+                    <button
+                      key={tee.id}
+                      className={data.preferredTee === tee.id ? "selected" : ""}
+                      onClick={() => {
+                        updateData((current) => ({ ...current, preferredTee: tee.id }));
+                        setSettingsEditor(null);
+                      }}
+                    >
+                      <span className={`tee-dot ${tee.colour || tee.id}`} />
+                      {tee.name}
+                      {data.preferredTee === tee.id && <Check size={17} />}
+                    </button>
+                  ))}
+                </div>
               </>
             )}
             {settingsEditor === "handicap" && (
@@ -2333,6 +2524,7 @@ function RoundSetup({
 }) {
   const loop = draft.loop || "east";
   const length = draft.roundLength || 9;
+  const selectedCourse = getCourse(draft.courseId || "hermanus-golf-club");
   const update = (patch: Partial<typeof draft>) =>
     setDraft({ ...draft, ...patch });
   return (
@@ -2352,9 +2544,21 @@ function RoundSetup({
           Course
           <select
             value={draft.courseName}
-            onChange={(event) => update({ courseName: event.target.value })}
+            onChange={(event) => {
+              const courseName = event.target.value;
+              update({
+                courseName,
+                courseId: courseName === "Arabella Golf Club" ? "arabella-golf-club" : courseName === "Hartford Golf Club" ? "hartford-golf-club" : courseName === "Zimbali Lakes" ? "zimbali-lakes" : courseName === "Simbithi Country Club" ? "simbithi-country-club" : "hermanus-golf-club",
+                tee: courseName === "Zimbali Lakes" ? "big-easy" : courseName === "Simbithi Country Club" ? "blue" : "white",
+                roundLength: courseName === "Hartford Golf Club" ? 9 : draft.roundLength,
+              });
+            }}
           >
             <option>Hermanus Golf Club</option>
+            <option>Arabella Golf Club</option>
+            <option>Hartford Golf Club</option>
+            <option>Zimbali Lakes</option>
+            <option>Simbithi Country Club</option>
           </select>
         </label>
         <div className="setup-grid">
@@ -2368,7 +2572,7 @@ function RoundSetup({
                 })
               }
             >
-              {[9, 18, 27].map((count) => (
+              {[9, 18, 27].filter((count) => count <= (selectedCourse?.holes.length || 18)).map((count) => (
                 <option key={count} value={count}>
                   {count} holes
                 </option>
@@ -2378,34 +2582,28 @@ function RoundSetup({
           <label>
             Tees
             <select
-              value={draft.tee || "white"}
+              value={draft.tee || selectedCourse?.tees[0]?.id || "white"}
               onChange={(event) =>
                 update({
                   tee: event.target.value as "white" | "yellow" | "red",
                 })
               }
             >
-              <option value="white">White tees</option>
-              <option value="yellow">Yellow tees</option>
-              <option value="red">Red tees</option>
+              {(selectedCourse?.tees || []).map((tee) => <option key={tee.id} value={tee.id}>{tee.name} tees</option>)}
             </select>
           </label>
         </div>
-        <label>
+        {selectedCourse?.loops && <label>
           Starting loop
           <select
             value={loop}
-            onChange={(event) =>
-              update({ loop: event.target.value as typeof loop })
-            }
+            onChange={(event) => update({ loop: event.target.value as typeof loop })}
           >
             {(["east", "north", "south"] as const).map((item) => (
-              <option key={item} value={item}>
-                {loopLabel(item, length as 9 | 18 | 27)}
-              </option>
+              <option key={item} value={item}>{loopLabel(item, length as 9 | 18 | 27)}</option>
             ))}
           </select>
-        </label>
+        </label>}
         <button
           className="primary-button start-round-button"
           onClick={startRound}
@@ -2510,13 +2708,14 @@ function RoundMode({
     emptyHole(holeNumber);
   const completed = draft.holes.filter((hole) => hole.score > 0).length;
   const courseId = draft.courseId || "hermanus-golf-club";
+  const selectedHolePar = holePar(holeNumber, courseId);
   const importedTeeOrigin = getHoleTeeOrigin(courseId, holeNumber, draft.tee || "white");
   const teeOrigin = currentHole.teeOrigin || importedTeeOrigin;
-  const teePlan = caddiePlan(readings, holePar(holeNumber), holeDistance(holeNumber, draft.tee || "white"));
+  const teePlan = caddiePlan(readings, selectedHolePar, holeDistance(holeNumber, draft.tee || "white", courseId));
   const courseHole = getCourse(courseId)?.holes.find((hole) => hole.number === holeNumber);
   const teeTarget = (() => {
     if (!teeOrigin || !courseHole) return getTeeTarget(courseId, holeNumber, draft.tee || "white");
-    if (holePar(holeNumber) === 3) return getTeeTarget(courseId, holeNumber, draft.tee || "white");
+    if (selectedHolePar === 3) return getTeeTarget(courseId, holeNumber, draft.tee || "white");
     const candidates = generateTeeLandingCandidates({
       teeOrigin,
       centreline: courseHole.centreline,
@@ -2557,12 +2756,12 @@ function RoundMode({
     : undefined;
   const teeDecision = resolveTeeDecision(
     readings,
-    holePar(holeNumber),
-    holePar(holeNumber) === 3
-      ? teeAdjustment?.effectiveDistanceM || holeDistance(holeNumber, draft.tee || "white")
+    selectedHolePar,
+    selectedHolePar === 3
+      ? teeAdjustment?.effectiveDistanceM || holeDistance(holeNumber, draft.tee || "white", courseId)
       : teeTarget
         ? calculateWindAdjustedDistance(distanceBetweenMeters(teeOrigin!, teeTarget.position), teeWind)?.effectiveDistanceM || distanceBetweenMeters(teeOrigin!, teeTarget.position)
-        : holeDistance(holeNumber, draft.tee || "white"),
+        : holeDistance(holeNumber, draft.tee || "white", courseId),
     rounds,
     { courseId, holeNumber, tee: draft.tee || "white" },
   );
@@ -2617,7 +2816,7 @@ function RoundMode({
       const previousAccuracy = currentHole.latestShotContext?.position.accuracyM;
       const validTravel = previousPosition && travelDistance >= 5 && isValidGolfShotContext(
         travelDistance,
-        holeDistance(holeNumber, draft.tee || "white"),
+        holeDistance(holeNumber, draft.tee || "white", courseId),
         Math.max(previousAccuracy ?? 0, position.accuracyM ?? 0),
       );
       const shots = currentHole.shots?.map((shot, shotIndex, allShots) =>
@@ -2662,15 +2861,16 @@ function RoundMode({
       </div>
       <div className="compact-hole-header">
         <strong>Hole {holeNumber}</strong>
-        <span>Par {holePar(holeNumber)}</span>
-        <span>{holeDistance(holeNumber, draft.tee || "white")}m</span>
+        <span>Par {selectedHolePar}</span>
+        <span>{holeDistance(holeNumber, draft.tee || "white", courseId)}m</span>
         <small>
           {completed}/{length}
         </small>
       </div>
       <div className="compact-caddie-row">
-        <Caddie
-          teeWind={teeWind}
+          <Caddie
+            readings={readings}
+            teeWind={teeWind}
           teeTargetName={teeTarget?.name}
           teeTargetDistance={teeTarget ? Math.round(distanceBetweenMeters(teeOrigin!, teeTarget.position)) : undefined}
           teeDecision={teeDecision}
@@ -2718,7 +2918,7 @@ function RoundMode({
               return (
                 <>
                   {windText ? <small>{windText}</small> : null}
-                  {currentHole.latestShotContext.lie !== "recovery" && adjustment && adjustment.appliedComponent !== "none" && isValidGolfShotContext(currentHole.latestShotContext!.distanceToTargetM, holeDistance(holeNumber, draft.tee || "white"), currentHole.latestShotContext!.position.accuracyM) ? (
+                  {currentHole.latestShotContext.lie !== "recovery" && adjustment && adjustment.appliedComponent !== "none" && isValidGolfShotContext(currentHole.latestShotContext!.distanceToTargetM, holeDistance(holeNumber, draft.tee || "white", courseId), currentHole.latestShotContext!.position.accuracyM) ? (
                     <small>Plays ~{Math.round(adjustment.effectiveDistanceM)}m</small>
                   ) : null}
                 </>
@@ -2736,7 +2936,7 @@ function RoundMode({
         <div className="shot-lie-selector" aria-label="Shot lie">
           <span className="eyebrow">LIE</span>
           <div className="shot-lie-chips">
-            {(["fairway", "rough", "bunker", "recovery"] as const).map((lie) => (
+            {(["fairway", "rough", "bunker", "green", "recovery"] as const).map((lie) => (
               <button
                 key={lie}
                 type="button"
@@ -2748,7 +2948,7 @@ function RoundMode({
                   })
                 }
               >
-                {lie[0].toUpperCase() + lie.slice(1)}
+                {lie === "recovery" ? "Trouble" : lie[0].toUpperCase() + lie.slice(1)}
               </button>
             ))}
           </div>
@@ -2763,7 +2963,7 @@ function RoundMode({
           currentHole.latestShotContext!.distanceToTargetM,
           adjustment?.effectiveDistanceM || currentHole.latestShotContext!.distanceToTargetM,
           currentHole.latestShotContext.lie,
-          holeDistance(holeNumber, draft.tee || "white"),
+          holeDistance(holeNumber, draft.tee || "white", courseId),
           currentHole.latestShotContext.position.accuracyM,
           rounds,
           { courseId, holeNumber, tee: draft.tee || "white" },
@@ -2802,14 +3002,14 @@ function RoundMode({
                   updateHole({
                     score: Math.max(
                       1,
-                      (currentHole.score || holePar(holeNumber)) - 1,
+                      (currentHole.score || selectedHolePar) - 1,
                     ),
                   })
                 }
               >
                 −
               </button>
-              <strong>{currentHole.score || holePar(holeNumber)}</strong>
+              <strong>{currentHole.score || selectedHolePar}</strong>
               <button
                 type="button"
                 aria-label="Increase score"
@@ -2817,7 +3017,7 @@ function RoundMode({
                   updateHole({
                     score: Math.min(
                       15,
-                      (currentHole.score || holePar(holeNumber)) + 1,
+                      (currentHole.score || selectedHolePar) + 1,
                     ),
                   })
                 }
@@ -2851,16 +3051,16 @@ function RoundMode({
           defaultClub={currentHole.latestShotContext?.lie ? (() => {
             const wind = calculateShotWind(weather, currentHole.latestShotContext!.shotBearingDeg);
             const adjustment = calculateWindAdjustedDistance(currentHole.latestShotContext!.distanceToTargetM, wind);
-              return adaptiveCaddieDecision(readings, bag, currentHole.latestShotContext!.distanceToTargetM, adjustment?.effectiveDistanceM || currentHole.latestShotContext!.distanceToTargetM, currentHole.latestShotContext!.lie, holeDistance(holeNumber, draft.tee || "white"), currentHole.latestShotContext!.position.accuracyM, rounds, { courseId, holeNumber, tee: draft.tee || "white" }).recommendedClub;
+              return adaptiveCaddieDecision(readings, bag, currentHole.latestShotContext!.distanceToTargetM, adjustment?.effectiveDistanceM || currentHole.latestShotContext!.distanceToTargetM, currentHole.latestShotContext!.lie, holeDistance(holeNumber, draft.tee || "white", courseId), currentHole.latestShotContext!.position.accuracyM, rounds, { courseId, holeNumber, tee: draft.tee || "white" }).recommendedClub;
           })() : undefined}
           putting={currentHole.onGreen === true}
-          par={holePar(holeNumber)}
+          par={selectedHolePar}
         />
       </section>
       <button
         className="primary-button save-hole"
         onClick={() => {
-          const saved = saveHole({ ...currentHole, score: currentHole.score > 0 ? currentHole.score : holePar(holeNumber) });
+          const saved = saveHole({ ...currentHole, score: currentHole.score > 0 ? currentHole.score : selectedHolePar });
           if (!saved) return;
           if (saved.holes.filter((hole) => hole.score > 0).length >= length) archiveRound(saved);
           else {
@@ -2894,6 +3094,7 @@ function RoundMode({
 }
 
 function Caddie({
+  readings,
   teeWind,
   teeTargetName,
   teeTargetDistance,
@@ -2901,6 +3102,7 @@ function Caddie({
   teePositionStatus,
   onCaptureTeeOrigin,
 }: {
+  readings: AppData["readings"];
   teeWind?: ReturnType<typeof calculateShotWind>;
   teeTargetName?: string;
   teeTargetDistance?: number;
@@ -2911,7 +3113,16 @@ function Caddie({
   const [showDecision, setShowDecision] = useState(false);
   const plan = teeDecision?.plan;
   const decision = teeDecision?.explanation;
-  if (!plan || !teeDecision) return null;
+  const usableReadingCount = readings.filter((reading) => reading.playable !== false && !reading.severeMiss).length;
+  if (!plan || !teeDecision) {
+    const earlyClubs = [...new Set(readings.map((reading) => reading.club))]
+      .map((club) => ({ club, summary: clubSummary(readings, club) }))
+      .filter((item) => item.summary.typical !== undefined)
+      .sort((a, b) => Math.abs((a.summary.typical || 0) - (teeTargetDistance || 0)) - Math.abs((b.summary.typical || 0) - (teeTargetDistance || 0)));
+    const earlyClub = earlyClubs[0];
+    if (!earlyClub) return <section className="caddie caddie-empty"><span className="caddie-title">TEE CADDIE</span><span className="eyebrow">BUILD YOUR CLUB DATA</span><b>Hit the range first</b><small>Record a club carry to unlock an early recommendation.</small></section>;
+    return <section className="caddie caddie-early"><span className="caddie-title">TEE CADDIE</span><span className="eyebrow">EARLY RECOMMENDATION</span><b>{clubDisplayLabel(earlyClub.club)}</b><small>{Math.round(earlyClub.summary.typical!)}m carry · limited personal data</small>{teeWind && <small className="caddie-weather">{teeWind.label || `${Math.round(teeWind.windSpeedKmh)} km/h wind`} · wind-adjusted</small>}</section>;
+  }
   return (
     <section
       className="caddie"
@@ -2962,6 +3173,7 @@ function Caddie({
                 ? `${teeDecision.club} off the tee`
                 : "Selected club"}
             </h3>
+            {usableReadingCount > 0 && usableReadingCount < 5 && <small className="caddie-confidence">Limited data · {usableReadingCount} usable reading{usableReadingCount === 1 ? "" : "s"}</small>}
             <p className="caddie-why">
               {decision.reasons.find(
                 (reason) => reason.key === "risk-comparison",

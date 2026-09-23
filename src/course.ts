@@ -123,7 +123,8 @@ export const loopLabel = (loop: CourseLoop, length: 9 | 18 | 27 = 27) => {
   ranges.push(start === previous ? `${start}` : `${start}–${previous}`);
   return `${loop[0].toUpperCase()}${loop.slice(1)} · ${ranges.join(" + ")}`;
 };
-export const holePar = (hole: number) => HERMANUS_PARS[hole - 1] || 4;
+export const holePar = (hole: number, courseId = "hermanus-golf-club") =>
+  COURSES[courseId]?.holes.find((item) => item.number === hole)?.par || HERMANUS_PARS[hole - 1] || 4;
 // White-tee distances from the official Hermanus Golf Club hole-by-hole course guide.
 export const HERMANUS_WHITE_DISTANCES = [
   312, 460, 394, 146, 357, 480, 371, 329, 136, 332, 433, 360, 150, 320, 327,
@@ -142,10 +143,10 @@ export const HERMANUS_TEE_DISTANCES = {
 } as const;
 export const HERMANUS_YELLOW_DISTANCES = HERMANUS_TEE_DISTANCES.yellow;
 export const HERMANUS_RED_DISTANCES = HERMANUS_TEE_DISTANCES.red;
-export const holeDistance = (hole: number, tee: Tee = "white") =>
-  HERMANUS_TEE_DISTANCES[tee as keyof typeof HERMANUS_TEE_DISTANCES]?.[
-    hole - 1
-  ] || 0;
+export const holeDistance = (hole: number, tee: Tee = "white", courseId = "hermanus-golf-club") => {
+  const course = COURSES[courseId];
+  return course?.holes.find((item) => item.number === hole)?.teeBoxes.find((box) => box.teeId === tee)?.distanceM || 0;
+};
 
 // Deliberately empty until each hole is checked against current imagery. This
 // prevents the app from presenting made-up GPS distances as if they were exact.
@@ -229,8 +230,100 @@ export const HERMANUS_COURSE: CourseDefinition = {
   ],
 };
 
+const yardsToMetres = (yards: readonly number[]) => yards.map((yardsValue) => Math.round(yardsValue * 0.9144));
+const ARABELLA_PARS = [4, 5, 4, 4, 3, 4, 3, 5, 4, 4, 4, 4, 5, 3, 4, 4, 3, 5] as const;
+const ARABELLA_YARDAGES = {
+  yellow: [336, 457, 444, 400, 153, 386, 181, 499, 285, 353, 367, 327, 489, 170, 384, 322, 167, 502],
+  white: [307, 438, 417, 378, 147, 355, 170, 476, 251, 340, 352, 316, 443, 130, 369, 294, 159, 471],
+  blue: [280, 412, 389, 369, 138, 330, 151, 441, 208, 324, 340, 302, 421, 119, 343, 267, 140, 432],
+  red: [234, 383, 357, 319, 129, 311, 117, 435, 203, 284, 307, 280, 412, 99, 339, 251, 136, 412],
+} as const;
+const arabellaTeeDefinitions: TeeDefinition[] = [
+  { id: "yellow", name: "Yellow", shortName: "Yellow", colour: "yellow" },
+  { id: "white", name: "White", shortName: "White", colour: "white" },
+  { id: "blue", name: "Blue", shortName: "Blue", colour: "blue" },
+  { id: "red", name: "Red", shortName: "Red", colour: "red" },
+];
+const arabellaHoles: HoleDefinition[] = ARABELLA_PARS.map((par, index) => ({
+  number: index + 1,
+  par,
+  teeBoxes: arabellaTeeDefinitions.map((tee) => ({ teeId: tee.id, distanceM: yardsToMetres(ARABELLA_YARDAGES[tee.id as keyof typeof ARABELLA_YARDAGES])[index] })),
+}));
+export const ARABELLA_COURSE: CourseDefinition = {
+  id: "arabella-golf-club",
+  name: "Arabella Golf Club",
+  shortName: "Arabella",
+  locationName: "Kleinmond, Western Cape",
+  latitude: -34.317069,
+  longitude: 19.133842,
+  timezone: "Africa/Johannesburg",
+  tees: arabellaTeeDefinitions,
+  holes: arabellaHoles,
+};
+
+const scorecardCourse = (input: { id: string; name: string; shortName: string; locationName: string; latitude: number; longitude: number; tees: TeeDefinition[]; pars: readonly number[]; distances: Record<string, readonly number[]> }): CourseDefinition => ({
+  ...input,
+  timezone: "Africa/Johannesburg",
+  holes: input.pars.map((par, index) => ({ number: index + 1, par, teeBoxes: input.tees.map((tee) => ({ teeId: tee.id, distanceM: input.distances[tee.id][index] })) })),
+});
+const zimbaliTee: TeeDefinition = { id: "big-easy", name: "Big Easy", shortName: "Big Easy", colour: "blue" };
+export const ZIMBALI_LAKES_COURSE = scorecardCourse({
+  id: "zimbali-lakes",
+  name: "Zimbali Lakes",
+  shortName: "Zimbali Lakes",
+  locationName: "Ballito, KwaZulu-Natal",
+  latitude: -29.538,
+  longitude: 31.204,
+  tees: [zimbaliTee],
+  pars: [4, 4, 5, 3, 4, 4, 3, 5, 4, 4, 4, 4, 5, 3, 4, 5, 3, 4],
+  distances: { "big-easy": yardsToMetres([416, 301, 532, 159, 339, 375, 177, 500, 339, 265, 394, 258, 485, 176, 306, 483, 165, 349]) },
+});
+const simbithiTees: TeeDefinition[] = [{ id: "blue", name: "Blue", shortName: "Blue", colour: "blue" }];
+const simbithiBlue = yardsToMetres([105, 108, 313, 123, 163, 111, 249, 153, 154, 152, 142, 434, 149, 360, 174, 93, 76, 340]);
+export const SIMBITHI_COURSE = scorecardCourse({
+  id: "simbithi-country-club",
+  name: "Simbithi Country Club",
+  shortName: "Simbithi",
+  locationName: "Ballito, KwaZulu-Natal",
+  latitude: -29.505,
+  longitude: 31.216,
+  tees: simbithiTees,
+  pars: [3, 3, 4, 3, 3, 3, 4, 3, 3, 3, 3, 5, 3, 4, 3, 3, 3, 4],
+  distances: { blue: simbithiBlue },
+});
+const hartfordTees: TeeDefinition[] = [
+  { id: "white", name: "White", shortName: "White", colour: "white" },
+  { id: "green", name: "Green", shortName: "Green", colour: "green" },
+  { id: "orange", name: "Orange", shortName: "Orange", colour: "orange" },
+  { id: "purple", name: "Purple", shortName: "Purple", colour: "purple" },
+  { id: "blue", name: "Blue", shortName: "Blue", colour: "blue" },
+];
+export const HARTFORD_COURSE = scorecardCourse({
+  id: "hartford-golf-club",
+  name: "Hartford Golf Club",
+  shortName: "Hartford",
+  locationName: "Northwich, Cheshire, England",
+  latitude: 53.242,
+  longitude: -2.521,
+  tees: hartfordTees,
+  // Hartford is a 9-hole layout played twice: the second nine has different
+  // tee yardages, but the same hole pars as the first nine.
+  pars: [5, 3, 5, 4, 3, 4, 3, 4, 4, 5, 3, 5, 4, 3, 4, 3, 4, 4],
+  distances: {
+    white: yardsToMetres([482, 173, 503, 255, 177, 259, 187, 349, 381, 399, 173, 503, 255, 166, 259, 187, 354, 381]),
+    green: yardsToMetres([466, 165, 488, 246, 125, 247, 172, 340, 353, 466, 165, 488, 246, 125, 247, 172, 340, 353]),
+    orange: yardsToMetres([400, 154, 397, 236, 127, 222, 160, 320, 308, 343, 154, 397, 246, 127, 222, 160, 320, 308]),
+    purple: yardsToMetres([343, 103, 159, 208, 104, 222, 145, 235, 240, 343, 103, 159, 208, 104, 222, 145, 235, 240]),
+    blue: yardsToMetres([212, 103, 159, 208, 104, 140, 88, 186, 240, 212, 103, 159, 208, 104, 140, 88, 186, 240]),
+  },
+});
+
 export const COURSES: Record<string, CourseDefinition> = {
   [HERMANUS_COURSE.id]: HERMANUS_COURSE,
+  [ARABELLA_COURSE.id]: ARABELLA_COURSE,
+  [ZIMBALI_LAKES_COURSE.id]: ZIMBALI_LAKES_COURSE,
+  [SIMBITHI_COURSE.id]: SIMBITHI_COURSE,
+  [HARTFORD_COURSE.id]: HARTFORD_COURSE,
 };
 
 export function getRuntimeCourse(courseId: string): CourseDefinition | undefined {

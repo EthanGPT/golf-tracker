@@ -223,6 +223,7 @@ describe("distance calculations", () => {
       "Dr",
       "3W",
       "4W-Hybrid",
+      "5i",
       "6i",
       "7i",
       "8i",

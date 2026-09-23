@@ -2,6 +2,7 @@ export const CLUBS: ClubName[] = [
   "Dr",
   "3W",
   "4W-Hybrid",
+  "5i",
   "6i",
   "7i",
   "8i",
@@ -13,6 +14,7 @@ export const DISTANCE_CLUBS: ClubName[] = [
   "Dr",
   "3W",
   "4W-Hybrid",
+  "5i",
   "6i",
   "7i",
   "8i",
@@ -167,7 +169,7 @@ export function enrichShotWithContext(
     endPosition: end.position,
   };
 }
-export type ShotLie = "tee" | "fairway" | "rough" | "bunker" | "recovery";
+export type ShotLie = "tee" | "fairway" | "rough" | "bunker" | "green" | "recovery";
 
 export type ShotContext = {
   holeNumber: number;
@@ -232,6 +234,7 @@ export type AppData = {
     roundsPerWeek: number;
     practiceSessionsPerWeek: number;
   };
+  practicePeriod?: "week" | "month";
   playerGoals?: string[];
   homeCourseId?: string;
   homeCourseName?: string;
@@ -720,7 +723,7 @@ export function isTeeTargetReachable(
 }
 
 export function clubDisplayLabel(club: string) {
-  return club === "4W-Hybrid" ? "4H" : club;
+  return club;
 }
 
 export function caddiePlan(
@@ -1016,6 +1019,7 @@ const adaptiveClubKind = (club: ClubName) =>
   club === "Dr" ? "Dr" : club === "3W" ? "3W" : club === "4W-Hybrid" ? "4W-Hybrid" : ["6i", "7i"].includes(club) ? "longIron" : "iron";
 
 function lieSuitability(club: ClubName, lie: ShotLie) {
+  if (lie === "green") return club === "Putter" ? 1 : 0;
   const values = ADAPTIVE_CADDIE_V1.lieSuitability[lie as keyof typeof ADAPTIVE_CADDIE_V1.lieSuitability];
   if (lie === "recovery") return ["6i", "7i", "8i", "9i"].includes(club) ? 1 : 0;
   return values[adaptiveClubKind(club) as keyof typeof values] ?? values.iron ?? 0;
@@ -1205,8 +1209,8 @@ export function seedData(): AppData {
     weeklyHistory: [],
     bag: [...CLUBS, "Putter"],
     practiceFrequency: { roundsPerWeek: 1, practiceSessionsPerWeek: 2 },
-    homeCourseId: "hermanus-golf-club",
-    homeCourseName: "Hermanus Golf Club",
+    homeCourseId: undefined,
+    homeCourseName: undefined,
     preferredTee: "white",
     lastRoundLength: 9,
     lastRoundLoop: "east",
@@ -1404,7 +1408,7 @@ export function personalisedRecommendation(
     return {
       text: "Choose your first practice focus.",
       evidence:
-        "Tell us what you want to improve during onboarding, or record a round to let the caddie find your priorities.",
+        "MyCaddie will use your rounds and practice data to identify your highest-impact priorities.",
       priorities,
     };
   const top = priorities[0];
