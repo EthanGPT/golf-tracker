@@ -994,7 +994,11 @@ export function resolveTeeDecision(
     return { club, weight, score: weight >= 2 ? ((positive - negative) / weight) * Math.min(1, weight / 6) : 0 };
   });
   const learnedBest = learned.filter((item) => item.weight >= 2 && getContextEvidence(rounds, { phase: "tee", club: item.club, ...context }).length >= 3).sort((a, b) => b.score - a.score)[0];
-  const plannedClub = par === 3 ? plan.sequence[0]?.club : plan.tee.club;
+  // Par-three tee shots still use the same risk-aware tee selection as every
+  // other tee shot. The sequence is distance-first and can incorrectly pick
+  // Driver simply because it is closest to a long target; plan.tee accounts
+  // for playable rate and severe-miss risk (for example, preferring 3W).
+  const plannedClub = plan.tee.club;
   const selectedClub = learnedBest && learnedBest.score > 0 ? learnedBest.club : plannedClub;
   const selectedExplanation = caddieDecision(readings, par, targetDistance, selectedClub);
   const selectedSummary = clubSummary(readings, selectedClub);
