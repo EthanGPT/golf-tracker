@@ -266,7 +266,12 @@ const scorecardCourse = (input: { id: string; name: string; shortName: string; l
   timezone: "Africa/Johannesburg",
   holes: input.pars.map((par, index) => ({ number: index + 1, par, teeBoxes: input.tees.map((tee) => ({ teeId: tee.id, distanceM: input.distances[tee.id][index] })) })),
 });
-const zimbaliTee: TeeDefinition = { id: "big-easy", name: "Big Easy", shortName: "Big Easy", colour: "blue" };
+const zimbaliTees: TeeDefinition[] = [
+  { id: "yellow", name: "Yellow", shortName: "Yellow", colour: "yellow" },
+  { id: "white", name: "White", shortName: "White", colour: "white" },
+  { id: "blue", name: "Blue", shortName: "Blue", colour: "blue" },
+  { id: "red", name: "Red", shortName: "Red", colour: "red" },
+];
 export const ZIMBALI_LAKES_COURSE = scorecardCourse({
   id: "zimbali-lakes",
   name: "Zimbali Lakes",
@@ -274,12 +279,23 @@ export const ZIMBALI_LAKES_COURSE = scorecardCourse({
   locationName: "Ballito, KwaZulu-Natal",
   latitude: -29.538,
   longitude: 31.204,
-  tees: [zimbaliTee],
+  tees: zimbaliTees,
   pars: [4, 4, 5, 3, 4, 4, 3, 5, 4, 4, 4, 4, 5, 3, 4, 5, 3, 4],
-  distances: { "big-easy": yardsToMetres([416, 301, 532, 159, 339, 375, 177, 500, 339, 265, 394, 258, 485, 176, 306, 483, 165, 349]) },
+  distances: {
+    yellow: yardsToMetres([381, 329, 478, 409, 191, 456, 361, 370, 219, 369, 191, 526, 377, 159, 357, 370, 441, 483]),
+    white: yardsToMetres([365, 304, 457, 398, 167, 446, 355, 349, 193, 349, 167, 500, 375, 135, 356, 344, 416, 415]),
+    blue: yardsToMetres([330, 280, 434, 373, 145, 420, 330, 320, 164, 314, 142, 475, 373, 126, 316, 318, 380, 386]),
+    red: yardsToMetres([290, 242, 375, 328, 145, 386, 237, 290, 160, 290, 138, 410, 326, 109, 296, 235, 330, 286]),
+  },
 });
-const simbithiTees: TeeDefinition[] = [{ id: "blue", name: "Blue", shortName: "Blue", colour: "blue" }];
+const simbithiTees: TeeDefinition[] = [
+  { id: "yellow", name: "Yellow", shortName: "Yellow", colour: "yellow" },
+  { id: "white", name: "White", shortName: "White", colour: "white" },
+  { id: "blue", name: "Blue", shortName: "Blue", colour: "blue" },
+];
 const simbithiBlue = yardsToMetres([105, 108, 313, 123, 163, 111, 249, 153, 154, 152, 142, 434, 149, 360, 174, 93, 76, 340]);
+const simbithiWhite = yardsToMetres([107, 123, 325, 131, 174, 119, 264, 156, 160, 167, 147, 472, 150, 384, 192, 115, 82, 388]);
+const simbithiYellow = yardsToMetres([117, 148, 341, 143, 195, 140, 272, 158, 164, 174, 160, 481, 161, 414, 205, 129, 87, 404]);
 export const SIMBITHI_COURSE = scorecardCourse({
   id: "simbithi-country-club",
   name: "Simbithi Country Club",
@@ -289,7 +305,7 @@ export const SIMBITHI_COURSE = scorecardCourse({
   longitude: 31.216,
   tees: simbithiTees,
   pars: [3, 3, 4, 3, 3, 3, 4, 3, 3, 3, 3, 5, 3, 4, 3, 3, 3, 4],
-  distances: { blue: simbithiBlue },
+  distances: { yellow: simbithiYellow, white: simbithiWhite, blue: simbithiBlue },
 });
 const hartfordTees: TeeDefinition[] = [
   { id: "white", name: "White", shortName: "White", colour: "white" },

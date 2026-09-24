@@ -993,7 +993,8 @@ export function resolveTeeDecision(
     return { club, weight, score: weight >= 2 ? ((positive - negative) / weight) * Math.min(1, weight / 6) : 0 };
   });
   const learnedBest = learned.filter((item) => item.weight >= 2 && getContextEvidence(rounds, { phase: "tee", club: item.club, ...context }).length >= 3).sort((a, b) => b.score - a.score)[0];
-  const selectedClub = learnedBest && learnedBest.score > 0 ? learnedBest.club : plan.tee.club;
+  const plannedClub = par === 3 ? plan.sequence[0]?.club : plan.tee.club;
+  const selectedClub = learnedBest && learnedBest.score > 0 ? learnedBest.club : plannedClub;
   const selectedExplanation = caddieDecision(readings, par, targetDistance, selectedClub);
   const selectedSummary = clubSummary(readings, selectedClub);
   const selectedTee = selectedSummary.typical === undefined || selectedClub === plan.tee.club

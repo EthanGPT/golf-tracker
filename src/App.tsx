@@ -2629,7 +2629,7 @@ function RoundSetup({
               update({
                 courseName,
                 courseId: courseName === "Arabella Golf Club" ? "arabella-golf-club" : courseName === "Hartford Golf Club" ? "hartford-golf-club" : courseName === "Zimbali Lakes" ? "zimbali-lakes" : courseName === "Simbithi Country Club" ? "simbithi-country-club" : "hermanus-golf-club",
-                tee: courseName === "Zimbali Lakes" ? "big-easy" : courseName === "Simbithi Country Club" ? "blue" : "white",
+                tee: courseName === "Simbithi Country Club" ? "blue" : "white",
                 roundLength: courseName === "Hartford Golf Club" ? 9 : draft.roundLength,
               });
             }}
