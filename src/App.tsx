@@ -485,17 +485,16 @@ function App() {
     return updated;
   };
   const exitRound = () => {
-    if (!roundDraft || !roundDraft.holes.some((hole) => hole.score > 0)) {
-      setRoundDraft(null);
-      setRoundSetupOpen(true);
-      setRoundHasStarted(false);
-      updateData((current) => ({
-        ...current,
-        rounds: current.rounds.filter((round) =>
-          round.status !== "in-progress" || round.holes.some((hole) => hole.score > 0),
-        ),
-      }));
-    }
+    // Exit means leave/discard the active round. Archived rounds are never touched.
+    // Clear both local draft state and any temporary in-progress copy so the next
+    // visit cannot silently resume the round the user just exited.
+    setRoundDraft(null);
+    setRoundSetupOpen(true);
+    setRoundHasStarted(false);
+    updateData((current) => ({
+      ...current,
+      rounds: current.rounds.filter((round) => round.status !== "in-progress"),
+    }));
     setScreen("today");
   };
   const archiveRound = (source = roundDraft) => {
