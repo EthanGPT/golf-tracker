@@ -10,6 +10,17 @@ export const CLUBS: ClubName[] = [
   "PW",
   "SW",
 ] as const;
+export const DEFAULT_BAG: ClubName[] = [
+  "Dr",
+  "3W",
+  "6i",
+  "7i",
+  "8i",
+  "9i",
+  "SW",
+  "PW",
+  "Putter",
+] as const;
 export const DISTANCE_CLUBS: ClubName[] = [
   "Dr",
   "3W",

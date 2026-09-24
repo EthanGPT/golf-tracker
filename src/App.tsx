@@ -16,6 +16,7 @@ import {
 import "./App.css";
 import {
   CLUBS,
+  DEFAULT_BAG,
   DISTANCE_CLUBS,
   caddiePlan,
   isTeeTargetReachable,
@@ -650,6 +651,7 @@ function App() {
         {screen === "distances" && (
           <Distances
             readings={data.readings}
+            bag={data.bag}
             units="metres"
             setUnits={() => undefined}
           />
@@ -1131,7 +1133,7 @@ function Range({
 }) {
   const [clubPickerOpen, setClubPickerOpen] = useState(false);
   const summary = clubSummary(data.readings, selectedClub);
-  const bag = data.bag?.length ? data.bag : CLUBS;
+  const bag = data.bag?.length ? data.bag : DEFAULT_BAG;
   const rangeOrder = ["Dr", "3W", "5W", "4W-Hybrid", "2i", "3i", "4i", "5i", "6i", "7i", "8i", "9i", "PW", "SW"];
   const orderedBag = [...bag].filter((club) => club !== "Putter").sort((a, b) => {
     const ai = rangeOrder.indexOf(a);
@@ -1290,14 +1292,17 @@ function Range({
 
 function Distances({
   readings,
+  bag,
   units,
   setUnits,
 }: {
   readings: AppData["readings"];
+  bag?: ClubName[];
   units: "metres" | "yards";
   setUnits: (units: "metres" | "yards") => void;
 }) {
   const [expandedClub, setExpandedClub] = useState<ClubName | null>(null);
+  const clubs = bag?.length ? bag : DEFAULT_BAG;
   return (
     <div className="stack distances-screen fade-in">
       <div className="sticky-tools">
@@ -1325,7 +1330,7 @@ function Distances({
         <span>⚠ Severe</span>
       </div>
       <div className="distance-board">
-        {DISTANCE_CLUBS.map((club) => {
+        {clubs.map((club) => {
           const summary = clubSummary(readings, club);
           return (
             <button
@@ -1617,15 +1622,15 @@ function Settings({
   const [settingsEditor, setSettingsEditor] = useState<
     "course" | "tee" | "handicap" | null
   >(null);
-  const bag = data.bag || [...CLUBS, "Putter"];
+  const bag = data.bag?.length ? data.bag : DEFAULT_BAG;
   const available = [...new Set([...CLUBS, "5W", "Putter", "2i", "3i", "4i"])];
   const preferredTees = getCourse(data.homeCourseId || "hermanus-golf-club")?.tees || [];
   const toggleClub = (club: string) =>
     updateData((current) => ({
       ...current,
-      bag: (current.bag || bag).includes(club)
-        ? (current.bag || bag).filter((item) => item !== club)
-        : [...(current.bag || bag), club],
+      bag: (current.bag?.length ? current.bag : bag).includes(club)
+        ? (current.bag?.length ? current.bag : bag).filter((item) => item !== club)
+        : [...(current.bag?.length ? current.bag : bag), club],
     }));
   const updateFrequency = (
     key: "roundsPerWeek" | "practiceSessionsPerWeek",
@@ -1661,7 +1666,7 @@ function Settings({
     if (!club || bag.includes(club)) return;
     updateData((current) => ({
       ...current,
-      bag: [...(current.bag || bag), club],
+      bag: [...(current.bag?.length ? current.bag : bag), club],
     }));
     setCustomClub("");
   };
