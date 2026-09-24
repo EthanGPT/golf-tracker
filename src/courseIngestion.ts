@@ -223,10 +223,10 @@ export const golfTraxxPublicGeometryProvider: CourseGeometryProvider = {
       : name === "Zimbali Lakes"
           ? [{ sourceName: "Zimbali Coastal Resort", zipcode: "4390SA", offset: 0, count: 18 }]
           : name === "Hartford Golf Club"
-            ? [
-                { sourceName: "Hartford Golf Club", zipcode: "CW8 3AP", offset: 0, count: 9 },
-                { sourceName: "Hartford Golf Club", zipcode: "CW8 3AP", offset: 9, count: 9 },
-              ]
+            // Hartford is a nine-hole course played twice. The club uses
+            // different back-nine tee positions, so never duplicate the
+            // front-nine GPS tee points as if they were the back nine.
+            ? [{ sourceName: "Hartford Golf Club", zipcode: "CW8 3AP", offset: 0, count: 9 }]
           : [{ sourceName: name, zipcode: "", offset: 0, count: 18 }];
     const features: ExternalGeometryFeature[] = [];
     const failures: { hole: number; status?: number; error?: string; url: string }[] = [];
