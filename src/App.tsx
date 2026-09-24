@@ -596,11 +596,15 @@ function App() {
     const roundsCount = current.practiceFrequency?.roundsPerWeek ?? 1;
     const practices = Array.from({ length: practiceCount }, (_, index) => plan.practiceSessionsComplete?.[index] ?? (index === 0 ? plan.practiceAComplete : index === 1 ? plan.practiceBComplete : index === 2 ? plan.practiceCComplete : false));
     const rounds = Array.from({ length: roundsCount }, (_, index) => plan.roundsComplete?.[index] ?? (index === 0 ? plan.roundComplete : false));
+    // Keep the completed plan visible for the rest of the week. A completed
+    // plan must not immediately turn back into three unchecked sessions.
     if (!practices.every(Boolean) || !rounds.every(Boolean)) return { ...current, weeklyPlan: plan };
     return {
       ...current,
-      weeklyHistory: [...(current.weeklyHistory || []), plan],
-      weeklyPlan: { weekStart: startOfWeek(), practiceAComplete: false, practiceBComplete: false, practiceCComplete: false, roundComplete: false, practiceSessionsComplete: [], roundsComplete: [] },
+      weeklyHistory: (current.weeklyHistory || []).some((item) => item.weekStart === plan.weekStart)
+        ? current.weeklyHistory
+        : [...(current.weeklyHistory || []), plan],
+      weeklyPlan: plan,
     };
   };
   const togglePracticeSession = (index: number) =>
