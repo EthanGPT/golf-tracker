@@ -404,17 +404,18 @@ function App() {
     distanceRef.current?.focus();
   };
 
-  const startRound = () => {
+  const startRound = (draftOverride?: AppData["rounds"][number]) => {
+    const activeDraft = draftOverride || roundDraft;
     const resumable = data.rounds
       .filter((round) => round.status === "in-progress" && round.holes.some((hole) => hole.score > 0))
       .sort((a, b) => {
         const active = (round: AppData["rounds"][number]) => round.archivedAt || round.date;
         return active(b).localeCompare(active(a)) || b.id.localeCompare(a.id);
       });
-    const draftResumable = roundDraft?.status === "in-progress" &&
-      roundDraft.holes.some((hole) => hole.score > 0) &&
-      !data.rounds.some((round) => round.id === roundDraft.id && round.status === "archived")
-      ? roundDraft
+    const draftResumable = activeDraft?.status === "in-progress" &&
+      activeDraft.holes.some((hole) => hole.score > 0) &&
+      !data.rounds.some((round) => round.id === activeDraft.id && round.status === "archived")
+      ? activeDraft
       : undefined;
     const unfinished = resumable[0] || draftResumable;
     const next = unfinished
@@ -990,7 +991,7 @@ function Today({
   latestRound?: AppData["rounds"][number];
   recommendation: ReturnType<typeof personalisedRecommendation>;
   go: (screen: Screen) => void;
-  startRound: () => void;
+  startRound: (draftOverride?: AppData["rounds"][number]) => void;
   updatePlan: (
     key:
       | "practiceAComplete"
@@ -1068,7 +1069,7 @@ function Today({
           <span>Start range session</span>
           <ChevronRight />
         </button>
-        <button onClick={startRound}>
+        <button onClick={() => startRound()}>
           <CircleDot />
           <span>Start a round</span>
           <ChevronRight />
@@ -2623,7 +2624,7 @@ function RoundSetup({
 }: {
   draft: AppData["rounds"][number];
   setDraft: (round: AppData["rounds"][number]) => void;
-  startRound: () => void;
+  startRound: (draftOverride?: AppData["rounds"][number]) => void;
   exitRound: () => void;
 }) {
   const loop = draft.loop || "east";
@@ -2713,7 +2714,7 @@ function RoundSetup({
         </label>}
         <button
           className="primary-button start-round-button"
-          onClick={() => { if (draft.tee !== selectedTee) setDraft({ ...draft, tee: selectedTee, teeId: selectedTee }); startRound(); }}
+          onClick={() => { const nextDraft = { ...draft, tee: selectedTee, teeId: selectedTee }; setDraft(nextDraft); startRound(nextDraft); }}
         >
           {draft.holes.some((hole) => hole.score > 0) ? "Resume round →" : "Start round →"}
         </button>
@@ -2753,7 +2754,7 @@ function RoundMode({
   setDraft: (round: AppData["rounds"][number]) => void;
   notice: string;
   setNotice: (notice: string) => void;
-  startRound: () => void;
+  startRound: (draftOverride?: AppData["rounds"][number]) => void;
   saveHole: (hole?: RoundHole) => AppData["rounds"][number] | null;
   archiveRound: (round?: AppData["rounds"][number] | null) => void;
   exitRound: () => void;
@@ -2790,7 +2791,7 @@ function RoundMode({
         <CircleDot size={34} />
         <h2>Start a round</h2>
         <p>Choose your course, tees and holes to get started.</p>
-        <button className="primary-button" onClick={startRound}>
+        <button className="primary-button" onClick={() => startRound()}>
           Continue to setup
         </button>
       </div>
