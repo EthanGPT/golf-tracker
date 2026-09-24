@@ -7,7 +7,7 @@ describe('database backup format', () => {
     const data = seedData()
     const restored = parseImport(exportData(data))
     expect(restored.schemaVersion).toBe(1)
-    expect(restored.readings).toHaveLength(31)
+    expect(restored.readings).toHaveLength(0)
     expect(restored.weeklyPlan.practiceAComplete).toBe(false)
   })
   it('rejects malformed imports', () => {

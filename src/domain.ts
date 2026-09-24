@@ -1193,22 +1193,10 @@ export function startOfWeek(date = new Date()) {
 }
 
 export function seedData(): AppData {
-  const createdAt = "2026-09-14T08:00:00.000Z";
-  const readings = SEED_READINGS.flatMap(([club, distances]) =>
-    distances.map((distanceMetres, index) => ({
-      id: `seed-${club}-${index}`,
-      club,
-      distanceMetres,
-      mishit: false,
-      playable: true,
-      sessionDate: "2026-09-14",
-      createdAt,
-    })),
-  );
   return {
     schemaVersion: 1,
-    handicapHistory: [{ id: "seed-handicap", date: "2026-09-14", index: 16.5 }],
-    readings,
+    handicapHistory: [],
+    readings: [],
     rounds: [],
     weeklyPlan: {
       weekStart: startOfWeek(),
@@ -1419,7 +1407,7 @@ export function personalisedRecommendation(
     return {
       text: "Choose your first practice focus.",
       evidence:
-        "MyCaddie will use your rounds and practice data to identify your highest-impact priorities.",
+        "MyCaddy will use your rounds and practice data to identify your highest-impact priorities.",
       priorities,
     };
   const top = priorities[0];

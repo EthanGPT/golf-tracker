@@ -147,7 +147,9 @@ describe("distance calculations", () => {
   it("calculates the median and excludes mishits", () => {
     expect(median([1, 5, 3])).toBe(3);
     const readings = [
-      ...data.readings,
+      { id: "carry-1", club: "6i" as const, distanceMetres: 140, mishit: false, sessionDate: "2026-09-14", createdAt: "2026-09-14", severeMiss: false },
+      { id: "carry-2", club: "6i" as const, distanceMetres: 150, mishit: false, sessionDate: "2026-09-14", createdAt: "2026-09-14", severeMiss: false },
+      { id: "carry-3", club: "6i" as const, distanceMetres: 160, mishit: false, sessionDate: "2026-09-14", createdAt: "2026-09-14", severeMiss: false },
       {
         id: "mishit",
         club: "6i" as const,
@@ -187,16 +189,9 @@ describe("distance calculations", () => {
     expect(isTeeTargetReachable(readings, "6i", 200)).toBe(false);
   });
 
-  it("explains the existing caddie plan from stored club metrics", () => {
+  it("handles caddie planning without personal distance data", () => {
     const decision = caddieDecision(data.readings, 4, 400);
-    const plan = caddiePlan(data.readings, 4, 400);
-    expect(decision?.plan).toEqual(plan?.sequence.map((item) => item.club));
-    expect(
-      decision?.reasons.some((reason) => reason.key === "primary-carry"),
-    ).toBe(true);
-    expect(
-      decision?.reasons.some((reason) => reason.key === "primary-playable"),
-    ).toBe(true);
+    expect(decision).toBeUndefined();
   });
   it.each([
     ["6i", 150],
@@ -205,8 +200,8 @@ describe("distance calculations", () => {
     ["9i", 114],
     ["PW", 95],
     ["SW", 85],
-  ] as const)("%s seed data has a %sm median", (club, expected) =>
-    expect(clubSummary(data.readings, club).typical).toBe(expected),
+  ] as const)("%s starts without a personal distance", (club, _expected) =>
+    expect(clubSummary(data.readings, club).typical).toBeUndefined(),
   );
   it("converts metres to yards only for display", () =>
     expect(convertMetres(100, "yards")).toBe(109));

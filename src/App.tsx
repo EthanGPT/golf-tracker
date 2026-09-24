@@ -235,6 +235,7 @@ function App() {
         if (event === "PASSWORD_RECOVERY") setPasswordRecovery(true);
         setSession(authSession);
         if (event === "SIGNED_OUT" && !guestModeRef.current) {
+          setCloudError("");
           setData(null);
           setDataReady(false);
         }
@@ -329,7 +330,7 @@ function App() {
   );
   if (!authReady)
     return <div className="loading">Connecting your notebook...</div>;
-  if (cloudError && !session && !data)
+  if (!supabase && cloudError && !session && !data)
     return (
       <div className="loading">
         {cloudError}
@@ -612,7 +613,7 @@ function App() {
     <div className="app-shell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">MYCADDIE</p>
+          <p className="eyebrow">MYCADDY</p>
           <h1>{screenTitle}</h1>
         </div>
         <button
@@ -686,7 +687,7 @@ function App() {
           <Progress data={data} recommendation={rec} updatePlan={updatePlan} focusRoundId={completedRoundId} latestHandicap={currentHandicap} updateRound={(round) => updateData((current) => ({ ...current, rounds: current.rounds.map((item) => item.id === round.id ? round : item) }))} />
         )}
         {screen === "settings" && (
-          <Settings data={data} updateData={updateData} signOut={() => { guestModeRef.current = false; setGuestMode(false); setSession(null); setData(null); setDataReady(false); setShowOnboarding(false); void supabase?.auth.signOut(); }} />
+          <Settings data={data} updateData={updateData} signOut={() => { guestModeRef.current = false; setGuestMode(false); setCloudError(""); setSession(null); setData(null); setDataReady(false); setShowOnboarding(false); void supabase?.auth.signOut(); }} />
         )}
       </main>
       <nav className="bottom-nav">
@@ -713,13 +714,13 @@ function App() {
 
 function CoachGuide({ kind, dismiss }: { kind: "range" | "round"; dismiss: () => void }) {
   const range = kind === "range";
-  const roundSteps = <><div><b>1</b><span>MyCaddie tells you the best club for this specific hole</span></div><div><b>2</b><span>Tap Next Shot at your ball and confirm the lie</span></div><div><b>3</b><span>MyCaddie adjusts for wind and your data, then gives you the next club</span></div><div><b>4</b><span>Repeat, enter your score, and save the hole</span></div></>;
+  const roundSteps = <><div><b>1</b><span>MyCaddy tells you the best club for this specific hole</span></div><div><b>2</b><span>Tap Next Shot at your ball and confirm the lie</span></div><div><b>3</b><span>MyCaddy adjusts for wind and your data, then gives you the next club</span></div><div><b>4</b><span>Repeat, enter your score, and save the hole</span></div></>;
   return <div className="guide-overlay" onClick={dismiss}>
     <div className="guide-card" onClick={(event) => event.stopPropagation()}>
       <span className="guide-kicker">{range ? "START HERE" : "ON-COURSE CADDIE"}</span>
       <h2>{range ? "Build your club numbers" : "Play with your data"}</h2>
       <div className="guide-steps">{range ? <><div><b>1</b><span>Enter the carry distance</span></div><div><b>2</b><span>Mark playable or severe miss (OB)</span></div><div><b>3</b><span>Build at least five usable shots for better tips</span></div></> : roundSteps}</div>
-      <div className="guide-demo"><span className="guide-cursor">↗</span><strong>{range ? "Tap Range" : "Tap Next Shot"}</strong><small>{range ? "Your distances power every recommendation" : "MyCaddie handles the decision at the ball"}</small></div>
+      <div className="guide-demo"><span className="guide-cursor">↗</span><strong>{range ? "Tap Range" : "Tap Next Shot"}</strong><small>{range ? "Your distances power every recommendation" : "MyCaddy handles the decision at the ball"}</small></div>
       <button className="primary-button" onClick={dismiss}>Got it</button>
     </div>
   </div>;
@@ -777,13 +778,13 @@ function AuthScreen({ onGuest }: { onGuest: () => void }) {
     <div className="landing-screen">
       <div className="landing-main">
         <div className="landing-copy">
-          <span className="tag">MYCADDIE</span>
+          <span className="tag">MYCADDY</span>
           <h1>Your personal golf caddie, powered by your data.</h1>
-          <p>MyCaddie learns your game and recommends the right shot, hole by hole.</p>
+          <p>MyCaddy learns your game and recommends the right shot, hole by hole.</p>
           <button className="primary-button landing-cta" onClick={() => { setAuthMode("signUp"); setMode("auth"); }}>Get started <ChevronRight size={17} /></button>
           <button className="landing-login" onClick={() => { setAuthMode("signIn"); setMode("auth"); }}>Already have an account? <strong>Sign in</strong></button>
         </div>
-        <div className="landing-preview" aria-label="MyCaddie tee recommendation preview">
+        <div className="landing-preview" aria-label="MyCaddy tee recommendation preview">
           <div className="preview-top"><span>HOLE 4</span><span>PAR 4</span><strong>362m</strong></div>
           <div className="preview-label">TEE</div>
           <div className="preview-club"><strong>3 WOOD</strong><span>BEST CLUB</span></div>
@@ -803,7 +804,7 @@ function AuthScreen({ onGuest }: { onGuest: () => void }) {
   if (signupSent) return (
     <div className="auth-screen">
       <div className="auth-card">
-        <span className="tag">MYCADDIE</span>
+        <span className="tag">MYCADDY</span>
         <h2>Account created.</h2>
         <p>Check your email and click the confirmation link to continue to onboarding.</p>
         <button className="primary-button" onClick={() => { setSignupSent(false); setAuthMode("signIn"); }}>Back to sign in</button>
@@ -815,7 +816,7 @@ function AuthScreen({ onGuest }: { onGuest: () => void }) {
     <div className="auth-screen">
       <div className="auth-card">
         <button className="back-link" onClick={() => setMode("landing")}>← Back</button>
-        <span className="tag">MYCADDIE</span>
+        <span className="tag">MYCADDY</span>
         <h2>{resetMode ? "Reset your password." : authMode === "signUp" ? "Create your account." : "Bring your game data with you."}</h2>
         <p>{resetMode ? "Enter your email and we’ll send you a secure reset link." : authMode === "signUp" ? "Use an email and password to sync your distances, rounds, and progress." : "Sign in to keep your distances, rounds, and progress synced across devices."}</p>
         <form onSubmit={resetMode ? sendResetEmail : authMode === "signUp" ? signUp : signIn}>
@@ -880,7 +881,7 @@ function PasswordRecovery({ onComplete }: { onComplete: () => void }) {
     else { setNotice("Password updated."); setTimeout(onComplete, 700); }
   };
   return <div className="auth-screen"><div className="auth-card">
-    <span className="tag">MYCADDIE</span><h2>Choose a new password.</h2>
+    <span className="tag">MYCADDY</span><h2>Choose a new password.</h2>
     <p>Set a new password for your account.</p>
     <form onSubmit={updatePassword}>
       <label>New password<input type="password" minLength={6} autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
@@ -945,12 +946,12 @@ function Onboarding({
   };
   const totalSteps = 5;
   return <div className="onboarding-screen">
-    <div className="onboarding-top"><span className="tag">MYCADDIE</span><span>{step + 1} / {totalSteps}</span></div>
+    <div className="onboarding-top"><span className="tag">MYCADDY</span><span>{step + 1} / {totalSteps}</span></div>
     <div className="onboarding-progress"><i style={{ width: `${((step + 1) / totalSteps) * 100}%` }} /></div>
     {step === 0 && <div className="onboarding-step"><span className="eyebrow">FIRST, YOUR HOME BASE</span><h1>Where do you<br /><em>play most?</em></h1><p>Choose your home club, or skip this for now and add it later in Settings.</p><label className="search-field"><span>HOME CLUB</span><select className="club-select" value={homeClub} onChange={(event) => setHomeClub(event.target.value)}><option value="">Choose a Club</option><option value="Hermanus Golf Club">Hermanus Golf Club</option><option value="Arabella Golf Club">Arabella Golf Club</option><option value="Hartford Golf Club">Hartford Golf Club</option><option value="Zimbali Lakes">Zimbali Lakes</option><option value="Simbithi Country Club">Simbithi Country Club</option></select></label><button className="skip-link" onClick={() => { setHomeClub(""); updateData((current) => ({ ...current, homeCourseId: undefined, homeCourseName: undefined })); setStep(1); }}>Skip for now</button></div>}
     {step === 1 && <div className="onboarding-step"><span className="eyebrow">YOUR PREFERENCE</span><h1>Which tees do you<br /><em>usually play?</em></h1><p>We’ll use this for round setup and hole strategy.</p><div className="tee-choices">{teeOptions.map((tee) => <button key={tee} className={preferredTee === tee ? "selected" : ""} onClick={() => setPreferredTee(tee)}><span className={`tee-dot ${tee}`} />{tee[0].toUpperCase() + tee.slice(1)}{preferredTee === tee && <Check size={17} />}</button>)}</div></div>}
     {step === 2 && <div className="onboarding-step"><span className="eyebrow">YOUR STARTING POINT</span><h1>What’s your<br /><em>handicap index?</em></h1><p>This helps us put your practice and progress in context.</p><label className="big-input"><input autoFocus type="text" inputMode="decimal" pattern="[0-9.]*" value={handicap} onChange={(event) => setHandicap(event.target.value.replace(/[^0-9.]/g, ""))} placeholder="16.5" /><span>INDEX</span></label><button className="skip-link" onClick={() => { setHandicap(""); setStep(3); }}>I don’t know it yet</button></div>}
-    {step === 3 && <div className="onboarding-step"><span className="eyebrow">YOUR RHYTHM</span><h1>How do you want<br /><em>to play?</em></h1><p>Keep it realistic. MyCaddie works just as well for occasional golfers as it does for regulars.</p><div className="period-toggle"><button className={practicePeriod === "week" ? "selected" : ""} onClick={() => setPracticePeriod("week")}>Per week</button><button className={practicePeriod === "month" ? "selected" : ""} onClick={() => setPracticePeriod("month")}>Per month</button></div><div className="onboarding-card"><span>Rounds {practicePeriod === "week" ? "per week" : "per month"}</span><input className="onboarding-number" type="text" inputMode="numeric" pattern="[0-9]*" value={data.practiceFrequency?.roundsPerWeek ?? 1} onChange={(event) => setFrequency("roundsPerWeek", Math.max(0, Math.min(practicePeriod === "week" ? 7 : 20, Number(event.target.value.replace(/[^0-9]/g, "")) || 0)))} /></div><div className="onboarding-card"><span>Practice sessions {practicePeriod === "week" ? "per week" : "per month"}</span><input className="onboarding-number" type="text" inputMode="numeric" pattern="[0-9]*" value={data.practiceFrequency?.practiceSessionsPerWeek ?? 2} onChange={(event) => setFrequency("practiceSessionsPerWeek", Math.max(0, Math.min(practicePeriod === "week" ? 14 : 40, Number(event.target.value.replace(/[^0-9]/g, "")) || 0)))} /></div></div>}
+    {step === 3 && <div className="onboarding-step"><span className="eyebrow">YOUR RHYTHM</span><h1>How do you want<br /><em>to play?</em></h1><p>Keep it realistic. MyCaddy works just as well for occasional golfers as it does for regulars.</p><div className="period-toggle"><button className={practicePeriod === "week" ? "selected" : ""} onClick={() => setPracticePeriod("week")}>Per week</button><button className={practicePeriod === "month" ? "selected" : ""} onClick={() => setPracticePeriod("month")}>Per month</button></div><div className="onboarding-card"><span>Rounds {practicePeriod === "week" ? "per week" : "per month"}</span><input className="onboarding-number" type="text" inputMode="numeric" pattern="[0-9]*" value={data.practiceFrequency?.roundsPerWeek ?? 1} onChange={(event) => setFrequency("roundsPerWeek", Math.max(0, Math.min(practicePeriod === "week" ? 7 : 20, Number(event.target.value.replace(/[^0-9]/g, "")) || 0)))} /></div><div className="onboarding-card"><span>Practice sessions {practicePeriod === "week" ? "per week" : "per month"}</span><input className="onboarding-number" type="text" inputMode="numeric" pattern="[0-9]*" value={data.practiceFrequency?.practiceSessionsPerWeek ?? 2} onChange={(event) => setFrequency("practiceSessionsPerWeek", Math.max(0, Math.min(practicePeriod === "week" ? 14 : 40, Number(event.target.value.replace(/[^0-9]/g, "")) || 0)))} /></div></div>}
     {step === 4 && <div className="onboarding-step"><span className="eyebrow">MAKE IT PERSONAL</span><h1>What’s in<br /><em>your bag?</em></h1><p>Start with the clubs you carry. Tap to remove or add individual clubs.</p><div className="onboarding-bag">{orderedBag.map((club) => <button key={club} className="selected" onClick={() => toggleClub(club)}>{clubDisplayLabel(club)}<Check size={14} /></button>)}</div><div className="add-club-row"><input value={customClub} placeholder="Add any club" onChange={(event) => setCustomClub(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); const club = customClub.trim(); if (club) { updateData((current) => ({ ...current, bag: [...new Set([...(current.bag || []), club])] })); setCustomClub(""); } } }} /><button onClick={() => { const club = customClub.trim(); if (club) { updateData((current) => ({ ...current, bag: [...new Set([...(current.bag || []), club])] })); setCustomClub(""); } }}>Add club</button></div><div className="distance-question"><strong>Do you know your club distances?</strong><div><button className={knowsDistances === true ? "selected" : ""} onClick={() => { setKnowsDistances(true); updateData((current) => ({ ...current, preferredTee })); setStep(5); }}>Yes, let’s add them</button><button className={knowsDistances === false ? "selected" : ""} onClick={() => { setKnowsDistances(false); updateData((current) => ({ ...current, preferredTee })); finish(); }}>Not yet</button></div></div></div>}
     {step === 5 && <div className="onboarding-step distance-onboarding-step"><span className="unit-badge">METRES</span><span className="eyebrow">YOUR NUMBERS</span><h1>What does each<br /><em>club carry?</em></h1><p>Enter your typical carry in metres. You can fill in the rest later.</p><div className="distance-entry-list">{orderedBag.filter((club) => club !== "Putter").map((club) => <label key={club}><span>{clubDisplayLabel(club)}</span><input type="text" inputMode="decimal" pattern="[0-9.]*" placeholder="—" value={distanceInputs[club] || ""} onChange={(event) => setDistanceInputs((current) => ({ ...current, [club]: event.target.value.replace(/[^0-9.]/g, "") }))} /></label>)}</div></div>}
     <div className="onboarding-footer"><button className="primary-button" onClick={next}>{step === 5 ? "Save distances" : step === 4 && knowsDistances === true ? "Add distances" : step === 4 ? "Open my tracker" : "Continue"} <ChevronRight size={17} /></button>{step > 0 && <button className="back-link" onClick={() => setStep((current) => current - 1)}>Back</button>}</div>
