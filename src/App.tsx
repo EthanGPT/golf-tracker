@@ -2885,8 +2885,9 @@ function RoundMode({
   const teeWind = teeOrigin && windTarget && weather
     ? calculateShotWind(weather, bearingBetween(teeOrigin, windTarget.position))
     : undefined;
+  const scorecardDistance = holeDistance(holeNumber, draft.tee || "white", courseId);
   const teeAdjustment = teeWind && teeTarget
-    ? calculateWindAdjustedDistance(distanceBetweenMeters(teeOrigin!, teeTarget.position), teeWind)
+    ? calculateWindAdjustedDistance(scorecardDistance, teeWind)
     : undefined;
   const teeDecision = resolveTeeDecision(
     readings,
@@ -3006,7 +3007,7 @@ function RoundMode({
             readings={readings}
             teeWind={teeWind}
           teeTargetName={teeTarget?.name}
-          teeTargetDistance={teeTarget ? Math.round(distanceBetweenMeters(teeOrigin!, teeTarget.position)) : undefined}
+          teeTargetDistance={selectedHolePar === 3 ? scorecardDistance : teeTarget ? Math.round(distanceBetweenMeters(teeOrigin!, teeTarget.position)) : undefined}
           teeDecision={teeDecision}
           teePositionStatus={teePositionStatus}
           onCaptureTeeOrigin={async () => {

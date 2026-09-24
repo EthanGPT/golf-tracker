@@ -798,16 +798,15 @@ export function caddiePlan(
   );
   const sequence: typeof stats = [];
   let remaining = targetDistance;
-  if (par === 3)
+  if (par === 3) {
+    // Never recommend an obviously overpowered club just because it is the
+    // numerically closest. Prefer the longest club that stays short of the
+    // target; only use an over-target club when no safer club is available.
+    const safe = stats.filter((item) => item.carry <= targetDistance * 1.05);
     sequence.push(
-      stats
-        .slice()
-        .sort(
-          (a, b) =>
-            Math.abs(a.carry - targetDistance) -
-            Math.abs(b.carry - targetDistance),
-        )[0],
+      (safe.length ? safe.sort((a, b) => b.carry - a.carry) : stats.slice().sort((a, b) => Math.abs(a.carry - targetDistance) - Math.abs(b.carry - targetDistance)))[0],
     );
+  }
   else {
     sequence.push(tee);
     remaining -= tee.carry;
