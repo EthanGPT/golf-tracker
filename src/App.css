@@ -2982,6 +2982,14 @@ select:focus {
   margin-top: 4px;
 }
 
+.settings-sheet .settings-tee-choices button,
+.settings-sheet .settings-tee-choices button.selected {
+  color: var(--forest);
+}
+.settings-sheet .settings-tee-choices button.selected {
+  font-weight: 800;
+}
+
 .caddie-weather {
   color: var(--muted);
   font-size: 0.72rem;

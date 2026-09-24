@@ -418,16 +418,16 @@ function App() {
       : {
       id: crypto.randomUUID(),
       date: localDateString(),
-      courseName: data.homeCourseName || "Hermanus Golf Club",
-      courseId: data.homeCourseId || "hermanus-golf-club",
+      courseName: data.rounds.filter((round) => round.status === "archived").at(-1)?.courseName || data.homeCourseName || "Hermanus Golf Club",
+      courseId: data.rounds.filter((round) => round.status === "archived").at(-1)?.courseId || data.homeCourseId || "hermanus-golf-club",
       overallNote: "",
       status: "in-progress" as const,
       holes: [],
       loop: data.lastRoundLoop || "east",
       loopId: data.lastRoundLoop || "east",
       roundLength: data.lastRoundLength || 9,
-      tee: data.preferredTee || "white",
-      teeId: data.preferredTee || "white",
+      tee: data.rounds.filter((round) => round.status === "archived").at(-1)?.tee || data.preferredTee || "white",
+      teeId: data.rounds.filter((round) => round.status === "archived").at(-1)?.tee || data.preferredTee || "white",
       handicapIndex: roundHandicapIndex(currentHandicap),
         };
     setRoundDraft(next);
@@ -1704,7 +1704,9 @@ function Settings({
     const bi = bagOrder.indexOf(b);
     return (ai < 0 ? bagOrder.length : ai) - (bi < 0 ? bagOrder.length : bi);
   });
-  const preferredTees = getCourse(data.homeCourseId || "hermanus-golf-club")?.tees || [];
+  const preferredTees = data.homeCourseId
+    ? getCourse(data.homeCourseId)?.tees || []
+    : ["yellow", "white", "blue", "red"].map((id) => ({ id, name: id[0].toUpperCase() + id.slice(1), shortName: id[0].toUpperCase() + id.slice(1), colour: id }));
   const toggleClub = (club: string) =>
     updateData((current) => ({
       ...current,
