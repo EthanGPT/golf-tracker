@@ -927,7 +927,9 @@ function Onboarding({
   const [customClub, setCustomClub] = useState("");
   const [distanceInputs, setDistanceInputs] = useState<Record<string, string>>({});
   const onboardingCourseId = homeClub.toLowerCase().replace(/\s+/g, "-");
-  const teeOptions = getCourse(onboardingCourseId)?.tees.map((tee) => tee.id) || ["white"];
+  // With no home course selected, let the player choose any standard tee.
+  // White remains the initial default, but it must not be the only option.
+  const teeOptions = getCourse(onboardingCourseId)?.tees.map((tee) => tee.id) || ["yellow", "white", "blue", "red"];
   const baseClubs = [...new Set([...CLUBS, "5W", "Putter", "2i", "3i", "4i"])] as ClubName[];
   const bag = data.bag || baseClubs;
   const onboardingClubOrder = ["Dr", "3W", "4W-Hybrid", "5W", "2i", "3i", "4i", "5i", "6i", "7i", "8i", "9i", "PW", "SW", "Putter"];
