@@ -1955,6 +1955,20 @@ function Settings({
           </div>
         </section>
       )}
+      <section className="settings-group">
+        <span className="eyebrow">SUPPORT</span>
+        <div className="panel settings-panel">
+          <a
+            className="settings-preference-row support-link"
+            href={`mailto:ethhartwell@gmail.com?subject=${encodeURIComponent("MyCaddy feedback or issue")}&body=${encodeURIComponent(`Hi Ethan,\n\nI have feedback or found an issue in MyCaddy.\n\nCourse: ${data.homeCourseName || "Not set"}\n\nDetails:\n`)}`}
+          >
+            <span>Feedback & support</span>
+            <strong>Email Ethan</strong>
+            <ChevronRight size={16} />
+          </a>
+          <p className="settings-help">Report an issue or send feedback.</p>
+        </div>
+      </section>
       {settingsEditor && (
         <div
           className="settings-sheet-overlay"
