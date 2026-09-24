@@ -1372,7 +1372,12 @@ function Distances({
   setUnits: (units: "metres" | "yards") => void;
 }) {
   const [expandedClub, setExpandedClub] = useState<ClubName | null>(null);
-  const clubs = bag?.length ? bag : DEFAULT_BAG;
+  const distanceOrder = ["Dr", "3W", "5W", "4W-Hybrid", "2i", "3i", "4i", "5i", "6i", "7i", "8i", "9i", "PW", "AW", "GW", "SW", "Putter"];
+  const clubs = [...(bag?.length ? bag : DEFAULT_BAG)].sort((a, b) => {
+    const ai = distanceOrder.indexOf(a);
+    const bi = distanceOrder.indexOf(b);
+    return (ai < 0 ? distanceOrder.length : ai) - (bi < 0 ? distanceOrder.length : bi);
+  });
   return (
     <div className="stack distances-screen fade-in">
       <div className="sticky-tools">
