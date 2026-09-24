@@ -2713,7 +2713,7 @@ function RoundSetup({
         </label>}
         <button
           className="primary-button start-round-button"
-          onClick={startRound}
+          onClick={() => { if (draft.tee !== selectedTee) setDraft({ ...draft, tee: selectedTee, teeId: selectedTee }); startRound(); }}
         >
           {draft.holes.some((hole) => hole.score > 0) ? "Resume round →" : "Start round →"}
         </button>
@@ -2809,7 +2809,9 @@ function RoundMode({
     );
   const loop = draft.loop || "east";
   const length = draft.roundLength || 9;
-  const holes = HERMANUS_LOOPS[loop].slice(0, length);
+  const holes = draft.courseId === "hermanus-golf-club"
+    ? HERMANUS_LOOPS[loop].slice(0, length)
+    : (getCourse(draft.courseId || "hermanus-golf-club")?.holes.map((hole) => hole.number) || []).slice(0, length);
   const index = Math.min(activeHole, holes.length - 1);
   const holeNumber = holes[index];
   const currentHole =
