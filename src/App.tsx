@@ -3447,6 +3447,9 @@ function ShotGroups({
     let nextShots = additions.length
       ? [...shots, ...additions.map(([phase, club]) => ({ id: crypto.randomUUID(), phase: phase as ShotPhase, club: club as string }))]
       : shots;
+    if (teeDefault) {
+      nextShots = nextShots.map((shot) => shot.phase === "tee" && !shot.outcomes?.length && !shot.note && shot.club !== teeDefault ? { ...shot, club: teeDefault } : shot);
+    }
     if (putting) nextShots = ensurePuttingShot(nextShots);
     if (nextShots !== shots) setShots(nextShots);
     if (putting) setActivePhase("putting");
