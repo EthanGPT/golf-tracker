@@ -92,7 +92,7 @@ export type OsmResolutionReport = {
   ambiguousClusters: string[];
 };
 
-export const GOLFTRAXX_HERMANUS_PROVIDER_VERSION = "golftraxx-hermanus-2026-09-21";
+export const GOLFTRAXX_HERMANUS_PROVIDER_VERSION = "golftraxx-public-2026-09-24";
 
 export interface CourseMetadataProvider {
   searchCourses(query: string): Promise<CourseSearchResult[]>;
@@ -213,17 +213,23 @@ export function parseKmlPlacemarks(
 export const golfTraxxPublicGeometryProvider: CourseGeometryProvider = {
   async getCourseGeometry({ courseName }) {
     const name = courseName || "Hermanus Golf Club";
-    const layouts = [
-      { sourceName: "Hermanus Golf Club (18 holes)", zipcode: "7200SA", offset: 0, count: 18 },
-      { sourceName: "Hermanus Golf Club (19 - 27)", zipcode: "SOUTH A", offset: 18, count: 9 },
-    ];
+    const layouts = name === "Hermanus Golf Club"
+      ? [
+          { sourceName: "Hermanus Golf Club (18 holes)", zipcode: "7200SA", offset: 0, count: 18 },
+          { sourceName: "Hermanus Golf Club (19 - 27)", zipcode: "SOUTH A", offset: 18, count: 9 },
+        ]
+      : name === "Arabella Golf Club"
+        ? [{ sourceName: "Arabella Golf Club", zipcode: "6381SA", offset: 0, count: 18 }]
+        : name === "Zimbali Lakes"
+          ? [{ sourceName: "Zimbali Coastal Resort", zipcode: "4390SA", offset: 0, count: 18 }]
+          : [{ sourceName: name, zipcode: "", offset: 0, count: 18 }];
     const features: ExternalGeometryFeature[] = [];
     const failures: { hole: number; status?: number; error?: string; url: string }[] = [];
     let requested = 0;
     for (const layout of layouts) {
       for (let index = 1; index <= layout.count; index += 1) {
         const holeNumber = layout.offset + index;
-        const sourceName = name === "Hermanus Golf Club" ? layout.sourceName : name;
+          const sourceName = layout.sourceName;
         const url = `https://golftraxx.com/hole-layout?coursename=${encodeURIComponent(sourceName)}&hole=${index}&static=true&zipcode=${encodeURIComponent(layout.zipcode)}`;
         requested += 1;
         try {
