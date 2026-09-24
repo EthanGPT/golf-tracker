@@ -1805,13 +1805,7 @@ function Settings({
             onClick={() => setSettingsEditor("tee")}
           >
             <span>Preferred tees</span>
-            <strong>
-              {data.preferredTee === "yellow"
-                ? "Yellow"
-                : data.preferredTee === "red"
-                  ? "Red"
-                  : "White"}
-            </strong>
+            <strong>{preferredTees.find((tee) => tee.id === data.preferredTee)?.name || "White"}</strong>
             <ChevronRight size={16} />
           </button>
           <button
