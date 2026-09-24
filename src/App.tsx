@@ -1373,7 +1373,7 @@ function Distances({
 }) {
   const [expandedClub, setExpandedClub] = useState<ClubName | null>(null);
   const distanceOrder = ["Dr", "3W", "5W", "4W-Hybrid", "2i", "3i", "4i", "5i", "6i", "7i", "8i", "9i", "PW", "AW", "GW", "SW", "Putter"];
-  const clubs = [...(bag?.length ? bag : DEFAULT_BAG)].sort((a, b) => {
+  const clubs = [...(bag?.length ? bag : DEFAULT_BAG)].filter((club) => club !== "Putter").sort((a, b) => {
     const ai = distanceOrder.indexOf(a);
     const bi = distanceOrder.indexOf(b);
     return (ai < 0 ? distanceOrder.length : ai) - (bi < 0 ? distanceOrder.length : bi);
