@@ -909,9 +909,8 @@ function Onboarding({
   const [homeClub, setHomeClub] = useState(data.homeCourseName || "");
   const [customClub, setCustomClub] = useState("");
   const [distanceInputs, setDistanceInputs] = useState<Record<string, string>>({});
-  const teeOptions = homeClub === "Hartford Golf Club"
-    ? ["white", "green", "orange", "purple", "blue"]
-    : ["red", "blue", "white", "yellow", "black"];
+  const onboardingCourseId = homeClub.toLowerCase().replace(/\s+/g, "-");
+  const teeOptions = getCourse(onboardingCourseId)?.tees.map((tee) => tee.id) || ["white"];
   const baseClubs = [...new Set([...CLUBS, "5W", "Putter", "2i", "3i", "4i"])] as ClubName[];
   const bag = data.bag || baseClubs;
   const onboardingClubOrder = ["Dr", "3W", "4W-Hybrid", "5W", "2i", "3i", "4i", "5i", "6i", "7i", "8i", "9i", "PW", "SW", "Putter"];
@@ -1699,6 +1698,12 @@ function Settings({
   >(null);
   const bag = data.bag?.length ? data.bag : DEFAULT_BAG;
   const available = [...new Set([...CLUBS, "5W", "Putter", "2i", "3i", "4i"])];
+  const bagOrder = ["Dr", "3W", "5W", "4W-Hybrid", "2i", "3i", "4i", "5i", "6i", "7i", "8i", "9i", "PW", "AW", "GW", "SW", "Putter"];
+  const orderedBag = [...bag].sort((a, b) => {
+    const ai = bagOrder.indexOf(a);
+    const bi = bagOrder.indexOf(b);
+    return (ai < 0 ? bagOrder.length : ai) - (bi < 0 ? bagOrder.length : bi);
+  });
   const preferredTees = getCourse(data.homeCourseId || "hermanus-golf-club")?.tees || [];
   const toggleClub = (club: string) =>
     updateData((current) => ({
@@ -1881,7 +1886,7 @@ function Settings({
           </button>
           {!editingBag && (
             <p className="bag-summary">
-              {bag.map(clubDisplayLabel).join(" · ")}
+              {orderedBag.map(clubDisplayLabel).join(" · ")}
             </p>
           )}
           {editingBag && (
