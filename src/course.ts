@@ -267,10 +267,10 @@ const scorecardCourse = (input: { id: string; name: string; shortName: string; l
   holes: input.pars.map((par, index) => ({ number: index + 1, par, teeBoxes: input.tees.map((tee) => ({ teeId: tee.id, distanceM: input.distances[tee.id][index] })) })),
 });
 const zimbaliTees: TeeDefinition[] = [
-  { id: "yellow", name: "Yellow", shortName: "Yellow", colour: "yellow" },
-  { id: "white", name: "White", shortName: "White", colour: "white" },
-  { id: "blue", name: "Blue", shortName: "Blue", colour: "blue" },
-  { id: "red", name: "Red", shortName: "Red", colour: "red" },
+  { id: "yellow", name: "Big Easy (Yellow)", shortName: "Big Easy", colour: "yellow" },
+  { id: "white", name: "Fish Eagle (White)", shortName: "Fish Eagle", colour: "white" },
+  { id: "blue", name: "Tatali (Blue)", shortName: "Tatali", colour: "blue" },
+  { id: "red", name: "The Dove (Red)", shortName: "The Dove", colour: "red" },
 ];
 export const ZIMBALI_LAKES_COURSE = scorecardCourse({
   id: "zimbali-lakes",
