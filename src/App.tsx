@@ -94,6 +94,7 @@ import {
 import {
   fetchAndCacheCourseGeometry,
   GOLFTRAXX_HERMANUS_PROVIDER_VERSION,
+  openStreetMapGeometryProvider,
   readCachedCourse,
 } from "./courseIngestion";
 
@@ -202,7 +203,7 @@ function App() {
         par: hole.par,
         distancesM: Object.fromEntries(hole.teeBoxes.map((tee) => [tee.teeId, tee.distanceM])),
       })),
-    })
+    }, courseId === "simbithi-country-club" ? openStreetMapGeometryProvider : undefined)
       .then(() => {
         if (!cancelled) setGeometryVersion((version) => version + 1);
       })
