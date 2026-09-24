@@ -156,6 +156,7 @@ function App() {
   const [roundHasStarted, setRoundHasStarted] = useState(false);
   const [roundWeather, setRoundWeather] = useState<WeatherContext>();
   const [completedRoundId, setCompletedRoundId] = useState<string | null>(null);
+  const [handicapPromptRoundId, setHandicapPromptRoundId] = useState<string | null>(null);
   const [, setGeometryVersion] = useState(0);
   useEffect(() => {
     localStorage.setItem("golf-tracker-screen", screen);
@@ -324,6 +325,11 @@ function App() {
   const archivedRounds =
     data?.rounds.filter((round) => round.status === "archived") || [];
   const latestRound = archivedRounds.at(-1);
+  useEffect(() => {
+    if (!latestRound || latestRound.date >= localDateString()) return;
+    if (localStorage.getItem(`golf-tracker-handicap-prompt-${latestRound.id}`)) return;
+    setHandicapPromptRoundId(latestRound.id);
+  }, [latestRound?.id, latestRound?.date]);
   const rec = personalisedRecommendation(
     data?.rounds || [],
     data?.readings || [],
@@ -686,10 +692,21 @@ function App() {
         {screen === "progress" && (
           <Progress data={data} recommendation={rec} updatePlan={updatePlan} focusRoundId={completedRoundId} latestHandicap={currentHandicap} updateRound={(round) => updateData((current) => ({ ...current, rounds: current.rounds.map((item) => item.id === round.id ? round : item), handicapHistory: round.handicapIndex != null && current.handicapHistory.at(-1)?.index !== round.handicapIndex ? [...current.handicapHistory, { id: crypto.randomUUID(), date: localDateString(), index: round.handicapIndex }] : current.handicapHistory }))} />
         )}
-        {screen === "settings" && (
+      {screen === "settings" && (
           <Settings data={data} updateData={updateData} signOut={() => { guestModeRef.current = false; setGuestMode(false); setCloudError(""); setSession(null); setData(null); setDataReady(false); setShowOnboarding(false); void supabase?.auth.signOut(); }} />
         )}
       </main>
+      {handicapPromptRoundId && (
+        <div className="settings-sheet-overlay" onClick={() => { localStorage.setItem(`golf-tracker-handicap-prompt-${handicapPromptRoundId}`, "dismissed"); setHandicapPromptRoundId(null); }}>
+          <div className="settings-sheet" onClick={(event) => event.stopPropagation()}>
+            <span className="eyebrow">ROUND FOLLOW-UP</span>
+            <h3>Update your handicap?</h3>
+            <p className="settings-help">You played a round yesterday. If your official index has changed, add the latest number to keep MyCaddy’s recommendations current.</p>
+            <button className="primary-button" onClick={() => { localStorage.setItem(`golf-tracker-handicap-prompt-${handicapPromptRoundId}`, "opened"); setHandicapPromptRoundId(null); setScreen("settings"); }}>Update handicap</button>
+            <button className="text-button" onClick={() => { localStorage.setItem(`golf-tracker-handicap-prompt-${handicapPromptRoundId}`, "dismissed"); setHandicapPromptRoundId(null); }}>Not now</button>
+          </div>
+        </div>
+      )}
       <nav className="bottom-nav">
         {navItems.map(({ id, label, icon: Icon }) => (
           <button
