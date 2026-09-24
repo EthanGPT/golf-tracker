@@ -203,7 +203,7 @@ function App() {
         par: hole.par,
         distancesM: Object.fromEntries(hole.teeBoxes.map((tee) => [tee.teeId, tee.distanceM])),
       })),
-    }, courseId === "simbithi-country-club" ? openStreetMapGeometryProvider : undefined)
+    }, courseId === "simbithi-country-club" || courseId === "zimbali-lakes" ? openStreetMapGeometryProvider : undefined)
       .then(() => {
         if (!cancelled) setGeometryVersion((version) => version + 1);
       })
