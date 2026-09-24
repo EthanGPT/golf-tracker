@@ -684,7 +684,7 @@ function App() {
           />
         )}
         {screen === "progress" && (
-          <Progress data={data} recommendation={rec} updatePlan={updatePlan} focusRoundId={completedRoundId} latestHandicap={currentHandicap} updateRound={(round) => updateData((current) => ({ ...current, rounds: current.rounds.map((item) => item.id === round.id ? round : item) }))} />
+          <Progress data={data} recommendation={rec} updatePlan={updatePlan} focusRoundId={completedRoundId} latestHandicap={currentHandicap} updateRound={(round) => updateData((current) => ({ ...current, rounds: current.rounds.map((item) => item.id === round.id ? round : item), handicapHistory: round.handicapIndex != null && current.handicapHistory.at(-1)?.index !== round.handicapIndex ? [...current.handicapHistory, { id: crypto.randomUUID(), date: localDateString(), index: round.handicapIndex }] : current.handicapHistory }))} />
         )}
         {screen === "settings" && (
           <Settings data={data} updateData={updateData} signOut={() => { guestModeRef.current = false; setGuestMode(false); setCloudError(""); setSession(null); setData(null); setDataReady(false); setShowOnboarding(false); void supabase?.auth.signOut(); }} />
@@ -1913,7 +1913,7 @@ function Settings({
           <span className="eyebrow">ACCOUNT</span>
           <div className="panel settings-panel">
             <button className="signout-button" onClick={signOut}>Sign out</button>
-            <p className="settings-help">Sign out to test onboarding with another account.</p>
+            <p className="settings-help">Your account data is synced securely to Supabase.</p>
           </div>
         </section>
       )}
@@ -2027,7 +2027,7 @@ function Settings({
 function roundScoreToPar(round: AppData["rounds"][number]) {
   return (
     (round.totalScore || roundTotal(round)) -
-    round.holes.reduce((sum, hole) => sum + holePar(hole.holeNumber), 0)
+    round.holes.reduce((sum, hole) => sum + holePar(hole.holeNumber, round.courseId), 0)
   );
 }
 
@@ -2077,7 +2077,7 @@ function Progress({
   const scores = recent.map((round) => {
     const playedHoles = round.holes.filter((hole) => hole.score > 0).length || round.holes.length;
     const score = round.totalScore || roundTotal(round);
-    const par = round.holes.reduce((sum, hole) => sum + holePar(hole.holeNumber), 0);
+    const par = round.holes.reduce((sum, hole) => sum + holePar(hole.holeNumber, round.courseId), 0);
     return playedHoles ? score - par : 0;
   });
   const recentCategoryStats = recentCategoryTroubleStats(data.rounds, holePar);
@@ -2125,7 +2125,7 @@ function Progress({
   const latestRound = recent.at(-1);
   const latestScore = latestRound ? latestRound.totalScore || roundTotal(latestRound) : undefined;
   const latestHoles = latestRound ? latestRound.holes.filter((hole) => hole.score > 0).length || latestRound.holes.length : 0;
-  const latestPar = latestRound ? latestRound.holes.reduce((sum, hole) => sum + holePar(hole.holeNumber), 0) : 0;
+  const latestPar = latestRound ? latestRound.holes.reduce((sum, hole) => sum + holePar(hole.holeNumber, latestRound.courseId), 0) : 0;
   const previous = scores.length > 1 ? scores.at(-2) : undefined;
   const previousRound = recent.length > 1 ? recent.at(-2) : undefined;
   const comparableScore = (score: number, round: AppData["rounds"][number], otherRound: AppData["rounds"][number]) => {
@@ -2450,7 +2450,7 @@ function RoundDetail({
   const [handicap, setHandicap] = useState<number | "">(roundHandicapIndex(latestHandicap, round.handicapIndex) ?? "");
   const score = round.totalScore || roundTotal(round);
   const par = round.holes.reduce(
-    (total, hole) => total + holePar(hole.holeNumber),
+    (total, hole) => total + holePar(hole.holeNumber, round.courseId),
     0,
   );
   const issues = round.holes.flatMap((hole) =>
@@ -2468,7 +2468,7 @@ function RoundDetail({
         <h2>{round.courseName}</h2>
         <p>
           {formatDate(round.date)} ·{" "}
-          {round.loop ? loopLabel(round.loop) : "Round"}
+          {round.courseId === "hermanus-golf-club" && round.loop ? loopLabel(round.loop) : `${round.holes.length} holes`}
         </p>
       </section>
       <section className="detail-score">
@@ -2489,7 +2489,7 @@ function RoundDetail({
       </section>
       <button className={editing ? "edit-save-button" : "text-button"} onClick={() => {
         if (editing) {
-          const holes = round.holes.map((hole, index) => ({ ...hole, score: Math.max(1, Number(scores[index]) || holePar(hole.holeNumber)) }));
+          const holes = round.holes.map((hole, index) => ({ ...hole, score: Math.max(1, Number(scores[index]) || holePar(hole.holeNumber, round.courseId)) }));
           const edited = { ...round, holes, handicapIndex: handicap === "" ? undefined : Number(handicap), status: "archived" as const };
           onSave({ ...edited, totalScore: roundTotal(edited) });
         }
@@ -2518,7 +2518,7 @@ function ArchivedScorecard({ round, onHoleTap, editingHole, onScoreChange }: { r
         <div>
           <span className="eyebrow">SCORECARD</span>
           <h3>
-            {loopLabel(round.loop || "east")} · {round.tee || "white"} tees
+            {round.courseId === "hermanus-golf-club" ? `${loopLabel(round.loop || "east")} · ` : ""}{round.tee || "white"} tees
           </h3>
         </div>
         <strong>{round.totalScore || roundTotal(round)}</strong>
@@ -2549,12 +2549,12 @@ function ArchivedScorecard({ round, onHoleTap, editingHole, onScoreChange }: { r
               (shot) =>
                 `${shot.phase === "short-game" ? "Short game" : shot.phase[0].toUpperCase() + shot.phase.slice(1)}: ${shot.club} (${shot.outcome === "good" ? "went well" : "needs work"})`,
             );
-          const relative = hole.score - holePar(hole.holeNumber);
+              const relative = hole.score - holePar(hole.holeNumber, round.courseId);
           const scoreClass = relative <= -2 ? "eagle" : relative === -1 ? "birdie" : relative === 0 ? "even" : relative === 1 ? "bogey" : "double-bogey";
           return (
             <div className="scorecard-row" key={hole.holeNumber} role={onHoleTap ? "button" : undefined} tabIndex={onHoleTap ? 0 : undefined} onClick={() => onHoleTap?.(hole.holeNumber)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onHoleTap?.(hole.holeNumber); }}>
               <span className="scorecard-hole">{hole.holeNumber}</span>
-              <span>{holePar(hole.holeNumber)}</span>
+              <span>{holePar(hole.holeNumber, round.courseId)}</span>
               <strong className={`scorecard-score ${scoreClass}`} title={relative < 0 ? (relative === -1 ? "Birdie" : "Eagle or better") : relative > 0 ? (relative === 1 ? "Bogey" : "Double bogey or worse") : "Par"}>
                 {editingHole === hole.holeNumber ? <input className="inline-score-input" type="number" min="1" max="15" value={hole.score} onChange={(event) => onScoreChange?.(hole.holeNumber, Number(event.target.value))} onClick={(event) => event.stopPropagation()} /> : <span>{hole.score}</span>}
               </strong>
@@ -2747,7 +2747,9 @@ function RoundMode({
   }, [draft?.id]);
   useEffect(() => {
     if (!draft) return;
-    const sequence = HERMANUS_LOOPS[draft.loop || "east"].slice(0, draft.roundLength || 9);
+    const sequence = draft.courseId === "hermanus-golf-club"
+      ? HERMANUS_LOOPS[draft.loop || "east"].slice(0, draft.roundLength || 9)
+      : (getCourse(draft.courseId || "hermanus-golf-club")?.holes.map((hole) => hole.number) || []).slice(0, draft.roundLength || 9);
     holeButtonRefs.current[sequence[Math.min(activeHole, sequence.length - 1)]]?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
   }, [activeHole, draft?.loop, draft?.roundLength]);
   if (!draft)
