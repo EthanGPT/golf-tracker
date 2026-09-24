@@ -128,6 +128,7 @@ function App() {
   const [cloudError, setCloudError] = useState("");
   const [dataReady, setDataReady] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [showLanding, setShowLanding] = useState(false);
   const [guide, setGuide] = useState<"range" | "round" | null>(null);
   const rangeGuideSeenRef = useRef(false);
   const roundGuideSeenRef = useRef(false);
@@ -349,6 +350,8 @@ function App() {
     );
   if (passwordRecovery && supabase)
     return <PasswordRecovery onComplete={() => setPasswordRecovery(false)} />;
+  if (showLanding)
+    return <AuthScreen onGuest={() => { guestModeRef.current = true; setGuestMode(true); setSession(null); const guestData = seedData(); guestData.readings = []; guestData.rounds = []; guestData.handicapHistory = []; localStorage.removeItem("golf-tracker-round-draft"); saveLocalData(guestData); setData(guestData); setDataReady(true); setShowOnboarding(true); setShowLanding(false); void supabase?.auth.signOut(); }} onAuthenticated={() => setShowLanding(false)} />;
   if (session && !dataReady)
     return <div className="loading">Loading your account...</div>;
   if (isCloudConfigured && !session && !guestMode) return <AuthScreen onGuest={() => { guestModeRef.current = true; setGuestMode(true); setSession(null); const guestData = seedData(); guestData.readings = []; guestData.rounds = []; guestData.handicapHistory = []; localStorage.removeItem("golf-tracker-round-draft"); saveLocalData(guestData); setData(guestData); setDataReady(true); setShowOnboarding(true); void supabase?.auth.signOut(); }} />;
@@ -619,7 +622,9 @@ function App() {
     <div className="app-shell">
       <header className="topbar">
         <div>
-          <p className="eyebrow">MYCADDY</p>
+          <button className="brand-button" type="button" onClick={() => setShowLanding(true)} aria-label="Open MyCaddy landing page">
+            <p className="eyebrow">MYCADDY</p>
+          </button>
           <h1>{screenTitle}</h1>
         </div>
         <button
@@ -743,7 +748,7 @@ function CoachGuide({ kind, dismiss }: { kind: "range" | "round"; dismiss: () =>
   </div>;
 }
 
-function AuthScreen({ onGuest }: { onGuest: () => void }) {
+function AuthScreen({ onGuest, onAuthenticated }: { onGuest: () => void; onAuthenticated?: () => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -763,6 +768,7 @@ function AuthScreen({ onGuest }: { onGuest: () => void }) {
     });
     setBusy(false);
     if (error) setNotice(error.message);
+    else onAuthenticated?.();
   };
 
   const signUp = async (event: React.FormEvent) => {

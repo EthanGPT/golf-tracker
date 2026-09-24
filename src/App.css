@@ -234,6 +234,8 @@
   background: var(--forest);
   color: white;
 }
+.brand-button { border: 0; padding: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.brand-button .eyebrow { margin: 0; }
 h1,
 h2,
 h3,
