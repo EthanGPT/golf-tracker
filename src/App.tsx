@@ -3110,14 +3110,15 @@ function RoundMode({
               <button
                 type="button"
                 aria-label="Decrease score"
-                onClick={() =>
+                onClick={(event) => {
+                  event.stopPropagation();
                   updateHole({
                     score: Math.max(
                       1,
                       (currentHole.score || selectedHolePar) - 1,
                     ),
-                  })
-                }
+                  });
+                }}
               >
                 −
               </button>
@@ -3125,14 +3126,15 @@ function RoundMode({
               <button
                 type="button"
                 aria-label="Increase score"
-                onClick={() =>
+                onClick={(event) => {
+                  event.stopPropagation();
                   updateHole({
                     score: Math.min(
                       15,
                       (currentHole.score || selectedHolePar) + 1,
                     ),
-                  })
-                }
+                  });
+                }}
               >
                 +
               </button>
