@@ -72,7 +72,6 @@ import {
 } from "./geo";
 import {
   isSyncPending,
-  mergeAppData,
   loadLocalData,
   clearArchivedRoundDraft,
   ROUND_DRAFT_KEY,
@@ -122,6 +121,7 @@ const emptyHole = (holeNumber: number): RoundHole => ({
 function App() {
   const [data, setData] = useState<AppData | null>(() => loadLocalData());
   const [session, setSession] = useState<Session | null>(null);
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [guestMode, setGuestMode] = useState(false);
   const guestModeRef = useRef(false);
   const [authReady, setAuthReady] = useState(false);
@@ -232,6 +232,7 @@ function App() {
     const { data: listener } = supabase.auth.onAuthStateChange(
       (event, authSession) => {
         if (guestModeRef.current) return;
+        if (event === "PASSWORD_RECOVERY") setPasswordRecovery(true);
         setSession(authSession);
         if (event === "SIGNED_OUT" && !guestModeRef.current) {
           setData(null);
@@ -251,12 +252,12 @@ function App() {
     (async () => {
       const cloudData = await loadCloudData(session);
       if (!cancelled) {
-        const localData = loadLocalData();
-        const reconciled = mergeAppData(localData, cloudData) || seedData();
+        // A browser's local data is not attributable to this account. Never
+        // merge it into a signed-in user's cloud snapshot: that can leak a
+        // previous guest or account's rounds into a different account.
+        const authoritativeData = cloudData || seedData();
+        saveLocalData(authoritativeData);
         if (cloudData) {
-          // Heal browser state before enabling the persistence effect. This
-          // prevents stale local archived rounds from being written back.
-          saveLocalData(reconciled);
           clearArchivedRoundDraft(cloudData);
           try {
             const rawDraft = localStorage.getItem(ROUND_DRAFT_KEY);
@@ -268,7 +269,8 @@ function App() {
             setRoundDraft(null);
           }
         }
-        setData(reconciled);
+        if (!cloudData) localStorage.removeItem(ROUND_DRAFT_KEY);
+        setData(authoritativeData);
         cloudReadySessionRef.current = session.user.id;
         setDataReady(true);
         setShowOnboarding(localStorage.getItem(`golf-tracker-onboarding-${session.user.id}`) !== "complete");
@@ -338,6 +340,10 @@ function App() {
         </small>
       </div>
     );
+  if (passwordRecovery && supabase)
+    return <PasswordRecovery onComplete={() => setPasswordRecovery(false)} />;
+  if (session && !dataReady)
+    return <div className="loading">Loading your account...</div>;
   if (isCloudConfigured && !session && !guestMode) return <AuthScreen onGuest={() => { guestModeRef.current = true; setGuestMode(true); setSession(null); const guestData = seedData(); guestData.readings = []; guestData.rounds = []; guestData.handicapHistory = []; localStorage.removeItem("golf-tracker-round-draft"); saveLocalData(guestData); setData(guestData); setDataReady(true); setShowOnboarding(true); void supabase?.auth.signOut(); }} />;
   if (!data) return <div className="loading">Loading your notebook...</div>;
   if ((session || guestMode) && showOnboarding)
@@ -722,8 +728,11 @@ function CoachGuide({ kind, dismiss }: { kind: "range" | "round"; dismiss: () =>
 function AuthScreen({ onGuest }: { onGuest: () => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [signupSent, setSignupSent] = useState(false);
+  const [resetMode, setResetMode] = useState(false);
 
   const signIn = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -738,18 +747,32 @@ function AuthScreen({ onGuest }: { onGuest: () => void }) {
     if (error) setNotice(error.message);
   };
 
-  const signUp = async () => {
+  const signUp = async (event: React.FormEvent) => {
+    event.preventDefault();
     if (!supabase) return;
+    if (password !== confirmPassword) { setNotice("Passwords do not match."); return; }
     setBusy(true);
     setNotice("");
     const { error } = await supabase.auth.signUp({ email, password });
     setBusy(false);
-    setNotice(
-      error ? error.message : "Check your email to confirm your account.",
-    );
+    if (error) setNotice(error.message);
+    else setSignupSent(true);
+  };
+
+  const sendResetEmail = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!supabase) return;
+    setBusy(true);
+    setNotice("");
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin + window.location.pathname,
+    });
+    setBusy(false);
+    setNotice(error ? error.message : "Check your email for a password reset link.");
   };
 
   const [mode, setMode] = useState<"landing" | "auth">("landing");
+  const [authMode, setAuthMode] = useState<"signIn" | "signUp" | "reset">("signIn");
   if (mode === "landing") return (
     <div className="landing-screen">
       <div className="landing-main">
@@ -757,8 +780,8 @@ function AuthScreen({ onGuest }: { onGuest: () => void }) {
           <span className="tag">MYCADDIE</span>
           <h1>Your personal golf caddie, powered by your data.</h1>
           <p>MyCaddie learns your game and recommends the right shot, hole by hole.</p>
-          <button className="primary-button landing-cta" onClick={() => setMode("auth")}>Get started <ChevronRight size={17} /></button>
-          <button className="landing-login" onClick={() => setMode("auth")}>Already have an account? <strong>Sign in</strong></button>
+          <button className="primary-button landing-cta" onClick={() => { setAuthMode("signUp"); setMode("auth"); }}>Get started <ChevronRight size={17} /></button>
+          <button className="landing-login" onClick={() => { setAuthMode("signIn"); setMode("auth"); }}>Already have an account? <strong>Sign in</strong></button>
         </div>
         <div className="landing-preview" aria-label="MyCaddie tee recommendation preview">
           <div className="preview-top"><span>HOLE 4</span><span>PAR 4</span><strong>362m</strong></div>
@@ -777,14 +800,25 @@ function AuthScreen({ onGuest }: { onGuest: () => void }) {
       <div className="landing-proof"><span>Know your distances</span><span>Plan every hole</span><span>Learn from every round</span></div>
     </div>
   );
+  if (signupSent) return (
+    <div className="auth-screen">
+      <div className="auth-card">
+        <span className="tag">MYCADDIE</span>
+        <h2>Account created.</h2>
+        <p>Check your email and click the confirmation link to continue to onboarding.</p>
+        <button className="primary-button" onClick={() => { setSignupSent(false); setAuthMode("signIn"); }}>Back to sign in</button>
+        <p className="notice">Confirmation sent to {email}</p>
+      </div>
+    </div>
+  );
   return (
     <div className="auth-screen">
       <div className="auth-card">
         <button className="back-link" onClick={() => setMode("landing")}>← Back</button>
         <span className="tag">MYCADDIE</span>
-        <h2>Bring your game data with you.</h2>
-        <p>Sign in to keep your distances, rounds, and progress synced across devices.</p>
-        <form onSubmit={signIn}>
+        <h2>{resetMode ? "Reset your password." : authMode === "signUp" ? "Create your account." : "Bring your game data with you."}</h2>
+        <p>{resetMode ? "Enter your email and we’ll send you a secure reset link." : authMode === "signUp" ? "Use an email and password to sync your distances, rounds, and progress." : "Sign in to keep your distances, rounds, and progress synced across devices."}</p>
+        <form onSubmit={resetMode ? sendResetEmail : authMode === "signUp" ? signUp : signIn}>
           <label>
             Email
             <input
@@ -795,7 +829,7 @@ function AuthScreen({ onGuest }: { onGuest: () => void }) {
               required
             />
           </label>
-          <label>
+          {!resetMode && <label>
             Password
             <input
               type="password"
@@ -805,21 +839,56 @@ function AuthScreen({ onGuest }: { onGuest: () => void }) {
               onChange={(event) => setPassword(event.target.value)}
               required
             />
-          </label>
+          </label>}
+          {authMode === "signUp" && <label>
+            Confirm password
+            <input type="password" autoComplete="new-password" minLength={6} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required />
+          </label>}
           <button className="primary-button" disabled={busy}>
-            {busy ? "Connecting..." : "Sign in"}
+            {busy ? "Please wait..." : resetMode ? "Send reset link" : authMode === "signUp" ? "Create account" : "Sign in"}
           </button>
         </form>
-        <button className="text-button" onClick={signUp} disabled={busy}>
-          Create account
-        </button>
-        <button className="guest-button" onClick={onGuest} disabled={busy}>
-          Continue without an account
-        </button>
+        {!resetMode && <>
+          {authMode === "signIn" && <button className="text-button" onClick={() => setAuthMode("signUp")} disabled={busy}>Need an account? Create one</button>}
+          {authMode === "signUp" && <button className="text-button" onClick={() => setAuthMode("signIn")} disabled={busy}>Already have an account? Sign in</button>}
+          {authMode === "signIn" && <button className="text-button" onClick={() => setResetMode(true)} disabled={busy}>Forgot password?</button>}
+          <button className="guest-button" onClick={onGuest} disabled={busy}>Try without an account</button>
+        </>}
+        {resetMode && <button className="text-button" onClick={() => setResetMode(false)} disabled={busy}>Back to sign in</button>}
         {notice && <p className="notice">{notice}</p>}
       </div>
     </div>
   );
+}
+
+function PasswordRecovery({ onComplete }: { onComplete: () => void }) {
+  const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
+  const updatePassword = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!supabase) return;
+    if (password.length < 6 || password !== confirmation) {
+      setNotice(password.length < 6 ? "Use at least 6 characters." : "Passwords do not match.");
+      return;
+    }
+    setBusy(true);
+    const { error } = await supabase.auth.updateUser({ password });
+    setBusy(false);
+    if (error) setNotice(error.message);
+    else { setNotice("Password updated."); setTimeout(onComplete, 700); }
+  };
+  return <div className="auth-screen"><div className="auth-card">
+    <span className="tag">MYCADDIE</span><h2>Choose a new password.</h2>
+    <p>Set a new password for your account.</p>
+    <form onSubmit={updatePassword}>
+      <label>New password<input type="password" minLength={6} autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
+      <label>Confirm password<input type="password" minLength={6} autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} required /></label>
+      <button className="primary-button" disabled={busy}>{busy ? "Updating..." : "Update password"}</button>
+    </form>
+    {notice && <p className="notice">{notice}</p>}
+  </div></div>;
 }
 
 function Onboarding({
