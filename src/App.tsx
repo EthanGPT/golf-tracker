@@ -3448,7 +3448,8 @@ function ShotGroups({
       ? [...shots, ...additions.map(([phase, club]) => ({ id: crypto.randomUUID(), phase: phase as ShotPhase, club: club as string }))]
       : shots;
     if (teeDefault) {
-      nextShots = nextShots.map((shot) => shot.phase === "tee" && !("outcomes" in shot && shot.outcomes?.length) && !("note" in shot && shot.note) && shot.club !== teeDefault ? { ...shot, club: teeDefault } : shot);
+      const syncedShots = nextShots.map((shot) => shot.phase === "tee" && !("outcomes" in shot && shot.outcomes?.length) && !("note" in shot && shot.note) && shot.club !== teeDefault ? { ...shot, club: teeDefault } : shot);
+      if (syncedShots.some((shot, index) => shot !== nextShots[index])) nextShots = syncedShots;
     }
     if (putting) nextShots = ensurePuttingShot(nextShots);
     if (nextShots !== shots) setShots(nextShots);
