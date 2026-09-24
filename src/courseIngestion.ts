@@ -220,8 +220,13 @@ export const golfTraxxPublicGeometryProvider: CourseGeometryProvider = {
         ]
       : name === "Arabella Golf Club"
         ? [{ sourceName: "Arabella Golf Club", zipcode: "6381SA", offset: 0, count: 18 }]
-        : name === "Zimbali Lakes"
+      : name === "Zimbali Lakes"
           ? [{ sourceName: "Zimbali Coastal Resort", zipcode: "4390SA", offset: 0, count: 18 }]
+          : name === "Hartford Golf Club"
+            ? [
+                { sourceName: "Hartford Golf Club", zipcode: "CW8 3AP", offset: 0, count: 9 },
+                { sourceName: "Hartford Golf Club", zipcode: "CW8 3AP", offset: 9, count: 9 },
+              ]
           : [{ sourceName: name, zipcode: "", offset: 0, count: 18 }];
     const features: ExternalGeometryFeature[] = [];
     const failures: { hole: number; status?: number; error?: string; url: string }[] = [];
@@ -230,7 +235,7 @@ export const golfTraxxPublicGeometryProvider: CourseGeometryProvider = {
       for (let index = 1; index <= layout.count; index += 1) {
         const holeNumber = layout.offset + index;
           const sourceName = layout.sourceName;
-        const url = `https://golftraxx.com/hole-layout?coursename=${encodeURIComponent(sourceName)}&hole=${index}&static=true&zipcode=${encodeURIComponent(layout.zipcode)}`;
+          const url = `https://golftraxx.com/hole-layout?coursename=${encodeURIComponent(sourceName)}&hole=${index}&static=true&zipcode=${encodeURIComponent(layout.zipcode)}`;
         requested += 1;
         try {
           const response = await fetch(url);
