@@ -362,6 +362,7 @@ function App() {
       <Onboarding
         data={data}
         updateData={(change) => setData((current) => (current ? change(current) : current))}
+        onLanding={() => setShowLanding(true)}
         finish={() => {
           if (session) localStorage.setItem(`golf-tracker-onboarding-${session.user.id}`, "complete");
           setShowOnboarding(false);
@@ -920,10 +921,12 @@ function Onboarding({
   data,
   updateData,
   finish,
+  onLanding,
 }: {
   data: AppData;
   updateData: (change: (current: AppData) => AppData) => void;
   finish: () => void;
+  onLanding: () => void;
 }) {
   const [step, setStep] = useState(0);
   const [handicap, setHandicap] = useState(String(currentHandicapIndex(data.handicapHistory) ?? ""));
@@ -971,7 +974,7 @@ function Onboarding({
   };
   const totalSteps = 5;
   return <div className="onboarding-screen">
-    <div className="onboarding-top"><span className="tag">MYCADDY</span><span>{step + 1} / {totalSteps}</span></div>
+    <div className="onboarding-top"><button className="brand-button" type="button" onClick={onLanding} aria-label="Open MyCaddy landing page"><span className="tag">MYCADDY</span></button><span>{step + 1} / {totalSteps}</span></div>
     <div className="onboarding-progress"><i style={{ width: `${((step + 1) / totalSteps) * 100}%` }} /></div>
     {step === 0 && <div className="onboarding-step"><span className="eyebrow">FIRST, YOUR HOME BASE</span><h1>Where do you<br /><em>play most?</em></h1><p>Choose your home club, or skip this for now and add it later in Settings.</p><label className="search-field"><span>HOME CLUB</span><select className="club-select" value={homeClub} onChange={(event) => setHomeClub(event.target.value)}><option value="">Choose a Club</option><option value="Hermanus Golf Club">Hermanus Golf Club</option><option value="Arabella Golf Club">Arabella Golf Club</option><option value="Hartford Golf Club">Hartford Golf Club</option><option value="Zimbali Lakes">Zimbali Lakes</option><option value="Simbithi Country Club">Simbithi Country Club</option></select></label><button className="skip-link" onClick={() => { setHomeClub(""); updateData((current) => ({ ...current, homeCourseId: undefined, homeCourseName: undefined })); setStep(1); }}>Skip for now</button></div>}
     {step === 1 && <div className="onboarding-step"><span className="eyebrow">YOUR PREFERENCE</span><h1>Which tees do you<br /><em>usually play?</em></h1><p>We’ll use this for round setup and hole strategy.</p><div className="tee-choices">{teeOptions.map((tee) => <button key={tee} className={preferredTee === tee ? "selected" : ""} onClick={() => setPreferredTee(tee)}><span className={`tee-dot ${tee}`} />{tee[0].toUpperCase() + tee.slice(1)}{preferredTee === tee && <Check size={17} />}</button>)}</div></div>}
