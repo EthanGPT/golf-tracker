@@ -432,8 +432,8 @@ function App() {
       loop: data.lastRoundLoop || "east",
       loopId: data.lastRoundLoop || "east",
       roundLength: data.lastRoundLength || 9,
-      tee: data.rounds.filter((round) => round.status === "archived").at(-1)?.tee || data.preferredTee || "white",
-      teeId: data.rounds.filter((round) => round.status === "archived").at(-1)?.tee || data.preferredTee || "white",
+      tee: data.preferredTee || "white",
+      teeId: data.preferredTee || "white",
       handicapIndex: roundHandicapIndex(currentHandicap),
         };
     setRoundDraft(next);
@@ -2629,6 +2629,9 @@ function RoundSetup({
   const loop = draft.loop || "east";
   const length = draft.roundLength || 9;
   const selectedCourse = getCourse(draft.courseId || "hermanus-golf-club");
+  const selectedTee = selectedCourse?.tees.some((tee) => tee.id === draft.tee)
+    ? draft.tee
+    : selectedCourse?.tees.find((tee) => tee.id === "white")?.id || selectedCourse?.tees[0]?.id || "white";
   const update = (patch: Partial<typeof draft>) =>
     setDraft({ ...draft, ...patch });
   return (
@@ -2653,7 +2656,7 @@ function RoundSetup({
               update({
                 courseName,
                 courseId: courseName === "Arabella Golf Club" ? "arabella-golf-club" : courseName === "Hartford Golf Club" ? "hartford-golf-club" : courseName === "Zimbali Lakes" ? "zimbali-lakes" : courseName === "Simbithi Country Club" ? "simbithi-country-club" : "hermanus-golf-club",
-                tee: courseName === "Simbithi Country Club" ? "blue" : "white",
+                tee: "white",
                 roundLength: courseName === "Hartford Golf Club" ? 9 : draft.roundLength,
               });
             }}
@@ -2686,7 +2689,7 @@ function RoundSetup({
           <label>
             Tees
             <select
-              value={draft.tee || selectedCourse?.tees[0]?.id || "white"}
+              value={selectedTee}
               onChange={(event) =>
                 update({
                   tee: event.target.value as "white" | "yellow" | "red",
