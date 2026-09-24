@@ -280,9 +280,8 @@ export const ZIMBALI_LAKES_COURSE = scorecardCourse({
   latitude: -29.538,
   longitude: 31.204,
   tees: zimbaliTees,
-  // Verified against the Zimbali Country Club scorecard: hole 4 is a par 4
-  // and hole 5 is the first par 3 on this nine.
-  pars: [4, 4, 5, 4, 3, 5, 4, 4, 3, 4, 3, 5, 4, 3, 4, 4, 5, 4],
+  // Official Zimbali Lakes scorecard sequence.
+  pars: [4, 4, 5, 3, 4, 4, 3, 5, 4, 4, 4, 4, 5, 3, 4, 5, 3, 4],
   distances: {
     yellow: yardsToMetres([416, 301, 532, 159, 339, 375, 177, 500, 339, 265, 394, 258, 485, 176, 306, 483, 165, 349]),
     white: yardsToMetres([392, 278, 497, 150, 313, 348, 160, 471, 315, 243, 361, 234, 452, 153, 294, 433, 152, 325]),
