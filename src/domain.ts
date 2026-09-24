@@ -230,6 +230,7 @@ export type WeeklyPlan = {
 
 export type AppData = {
   schemaVersion: number;
+  onboardingComplete?: boolean;
   handicapHistory: {
     id: string;
     date: string;
@@ -1196,6 +1197,7 @@ export function startOfWeek(date = new Date()) {
 export function seedData(): AppData {
   return {
     schemaVersion: 1,
+    onboardingComplete: false,
     handicapHistory: [],
     readings: [],
     rounds: [],

@@ -277,7 +277,7 @@ function App() {
         setData(authoritativeData);
         cloudReadySessionRef.current = session.user.id;
         setDataReady(true);
-        setShowOnboarding(localStorage.getItem(`golf-tracker-onboarding-${session.user.id}`) !== "complete");
+        setShowOnboarding(!authoritativeData.onboardingComplete && localStorage.getItem(`golf-tracker-onboarding-${session.user.id}`) !== "complete");
       }
     })().catch((error) => {
       if (!cancelled)
@@ -365,6 +365,7 @@ function App() {
         onLanding={() => setShowLanding(true)}
         finish={() => {
           if (session) localStorage.setItem(`golf-tracker-onboarding-${session.user.id}`, "complete");
+          setData((current) => current ? { ...current, onboardingComplete: true } : current);
           setShowOnboarding(false);
           setScreen("today");
         }}
