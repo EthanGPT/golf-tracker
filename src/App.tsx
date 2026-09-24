@@ -3404,7 +3404,7 @@ function ShotGroups({
     {
       phase: "tee",
       label: "Tee club",
-      clubs: clubs.filter((club) => !["PW", "SW", "Putter"].includes(club)),
+      clubs: clubs.filter((club) => !["PW", "SW", "Putter"].includes(club) || club === teeDefault),
     },
     {
       phase: "approach",
@@ -3448,7 +3448,7 @@ function ShotGroups({
       ? [...shots, ...additions.map(([phase, club]) => ({ id: crypto.randomUUID(), phase: phase as ShotPhase, club: club as string }))]
       : shots;
     if (teeDefault) {
-      nextShots = nextShots.map((shot) => shot.phase === "tee" && !shot.outcomes?.length && !shot.note && shot.club !== teeDefault ? { ...shot, club: teeDefault } : shot);
+      nextShots = nextShots.map((shot) => shot.phase === "tee" && !("outcomes" in shot && shot.outcomes?.length) && !("note" in shot && shot.note) && shot.club !== teeDefault ? { ...shot, club: teeDefault } : shot);
     }
     if (putting) nextShots = ensurePuttingShot(nextShots);
     if (nextShots !== shots) setShots(nextShots);
