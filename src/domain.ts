@@ -815,12 +815,9 @@ export function caddiePlan(
     item.carry * (1 - item.severe) ** 2 * (0.85 + item.playable * 0.15);
   // Tee selection evaluates the whole bag. An iron can be the correct tee
   // club when its carry is sufficient and its penalty risk is materially lower.
-  const reliableTeeClubs = stats.filter(
-    (item) => item.severe <= 0.25 && item.playable >= 0.5,
-  );
-  const tee = (reliableTeeClubs.length ? reliableTeeClubs : stats)
+  const tee = stats
     .slice()
-    .sort((a, b) => reliableTeeClubs.length ? b.carry - a.carry : teeScore(b) - teeScore(a))[0];
+    .sort((a, b) => teeScore(b) - teeScore(a))[0];
   // Driver and 3W are tee clubs. 4W-Hybrid remains available from the fairway.
   const fairwayClubs = stats.filter(
     (item) => !["Dr", "3W"].includes(item.club),
