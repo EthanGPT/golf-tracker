@@ -676,13 +676,39 @@ export function median(values: number[]) {
     : Math.round((sorted[middle - 1] + sorted[middle]) / 2);
 }
 
+/**
+ * Keeps carry estimates robust to outliers while allowing a recent change in
+ * strike pattern to show up sooner than a plain all-time median.
+ */
+function recentWeightedMedian(readings: RangeReading[]) {
+  if (!readings.length) return undefined;
+  if (readings.length < 3) return median(readings.map((reading) => reading.distanceMetres));
+  const chronological = [...readings].sort((a, b) =>
+    a.createdAt.localeCompare(b.createdAt),
+  );
+  const recentStart = Math.max(0, chronological.length - 10);
+  const weighted = chronological
+    .map((reading, index) => ({
+      value: reading.distanceMetres,
+      weight: index >= recentStart ? 5 : 1,
+    }))
+    .sort((a, b) => a.value - b.value);
+  const halfway = weighted.reduce((total, item) => total + item.weight, 0) / 2;
+  let accumulated = 0;
+  for (const item of weighted) {
+    accumulated += item.weight;
+    if (accumulated >= halfway) return item.value;
+  }
+  return weighted.at(-1)?.value;
+}
+
 export function clubSummary(readings: RangeReading[], club: ClubName) {
   const usable = readings.filter(
     (reading) => reading.club === club && !reading.severeMiss,
   );
   const distances = usable.map((reading) => reading.distanceMetres);
   return {
-    typical: median(distances),
+    typical: recentWeightedMedian(usable),
     min: distances.length ? Math.min(...distances) : undefined,
     max: distances.length ? Math.max(...distances) : undefined,
     usableCount: distances.length,
@@ -789,9 +815,12 @@ export function caddiePlan(
     item.carry * (1 - item.severe) ** 2 * (0.85 + item.playable * 0.15);
   // Tee selection evaluates the whole bag. An iron can be the correct tee
   // club when its carry is sufficient and its penalty risk is materially lower.
-  const tee = stats
+  const reliableTeeClubs = stats.filter(
+    (item) => item.severe <= 0.25 && item.playable >= 0.5,
+  );
+  const tee = (reliableTeeClubs.length ? reliableTeeClubs : stats)
     .slice()
-    .sort((a, b) => teeScore(b) - teeScore(a))[0];
+    .sort((a, b) => reliableTeeClubs.length ? b.carry - a.carry : teeScore(b) - teeScore(a))[0];
   // Driver and 3W are tee clubs. 4W-Hybrid remains available from the fairway.
   const fairwayClubs = stats.filter(
     (item) => !["Dr", "3W"].includes(item.club),
@@ -799,12 +828,17 @@ export function caddiePlan(
   const sequence: typeof stats = [];
   let remaining = targetDistance;
   if (par === 3) {
-    // Never recommend an obviously overpowered club just because it is the
-    // numerically closest. Prefer the longest club that stays short of the
-    // target; only use an over-target club when no safer club is available.
-    const safe = stats.filter((item) => item.carry <= targetDistance * 1.05);
+    // Par-three selection is distance-first: choose the reliable carry closest
+    // to the wind-adjusted target, rather than automatically taking the longest
+    // club that stays below it.
     sequence.push(
-      (safe.length ? safe.sort((a, b) => b.carry - a.carry) : stats.slice().sort((a, b) => Math.abs(a.carry - targetDistance) - Math.abs(b.carry - targetDistance)))[0],
+      stats.slice().sort((a, b) => {
+        const score = (item: (typeof stats)[number]) =>
+          Math.abs(item.carry - targetDistance) +
+          item.severe * targetDistance * 0.5 +
+          (1 - item.playable) * targetDistance * 0.15;
+        return score(a) - score(b);
+      })[0],
     );
   }
   else {
@@ -997,7 +1031,7 @@ export function resolveTeeDecision(
   // matches the target. Risk/playable data is already used by caddiePlan to
   // break ties, while normal tee holes use the broader tee-risk selection.
   const plannedClub = par === 3 ? plan.sequence[0]?.club || plan.tee.club : plan.tee.club;
-  const selectedClub = learnedBest && learnedBest.score > 0 ? learnedBest.club : plannedClub;
+  const selectedClub = par !== 3 && learnedBest && learnedBest.score > 0 ? learnedBest.club : plannedClub;
   const selectedExplanation = caddieDecision(readings, par, targetDistance, selectedClub);
   const selectedSummary = clubSummary(readings, selectedClub);
   const selectedTee = selectedSummary.typical === undefined || selectedClub === plan.tee.club
@@ -1024,7 +1058,7 @@ export const ADAPTIVE_CADDIE_V1 = {
   shortBias: 0.04,
   lieSuitability: {
     tee: { Dr: 1, "3W": 0.98, "4W-Hybrid": 0.98, iron: 0.95 },
-    fairway: { Dr: 0, "3W": 0, "4W-Hybrid": 1, iron: 1 },
+    fairway: { Dr: 0, "3W": 1, "4W-Hybrid": 1, iron: 1 },
     rough: { Dr: 0, "3W": 0.45, "4W-Hybrid": 0.78, iron: 0.95 },
     bunker: { Dr: 0, "3W": 0, "4W-Hybrid": 0, longIron: 0.45, iron: 0.9 },
   },
@@ -1050,10 +1084,15 @@ function greensideClubDecision(readings: RangeReading[], bag: ClubName[], effect
     (preferred.playablePercentage || 0) >= (alternative.playablePercentage || 0) + 20 &&
     (preferred.severeMissPercentage || 0) <= (alternative.severeMissPercentage || 0) + 5;
   const chipType = effectiveDistanceM <= 35;
-  const defaultClub = chipType ? "SW" : "PW";
+  const swCanReach = sw.typical !== undefined && sw.typical >= effectiveDistanceM;
+  const defaultClub = effectiveDistanceM <= 80 && swCanReach ? "SW" : "PW";
   const alternative = defaultClub === "SW" ? "PW" : "SW";
   const club = available.includes(defaultClub)
-    ? (available.includes(alternative) && strongEvidence(clubSummary(readings, alternative), clubSummary(readings, defaultClub)) ? alternative : defaultClub)
+    ? (defaultClub === "SW"
+      ? "SW"
+      : available.includes(alternative) && strongEvidence(clubSummary(readings, alternative), clubSummary(readings, defaultClub))
+        ? alternative
+        : defaultClub)
     : available[0];
   return { club, chipType };
 }
@@ -1139,14 +1178,25 @@ export function adaptiveCaddieDecision(
       const utility = fit * ADAPTIVE_CADDIE_V1.distanceFitWeight + playable * ADAPTIVE_CADDIE_V1.playableWeight - severe * ADAPTIVE_CADDIE_V1.severeMissPenalty + reliability * ADAPTIVE_CADDIE_V1.reliabilityWeight + suitability * 0.15 - shortPreference + contextualScore;
       return { club, carryM: carry, distanceGapM: gap, distanceFitScore: fit, playableRate: playable, severeMissRate: severe, lieSuitability: suitability, reliabilityScore: reliability, utility, ...(onCourse.adjustmentM ? { adjustmentM: onCourse.adjustmentM } : {}) };
     });
-  const usable = candidates.filter((candidate) => !candidate.excluded).sort((a, b) => (b.utility || -Infinity) - (a.utility || -Infinity));
-  const best = usable[0];
+  const usable = candidates.filter((candidate) => !candidate.excluded);
+  // For a green approach, distance is the primary decision: use the shortest
+  // reliable club that can carry the wind-adjusted target. Utility/risk only
+  // breaks ties or handles the case where no club can reach.
+  const reachable = usable.filter((candidate) => (candidate.carryM || 0) >= effectiveDistanceM);
+  const distanceFirst = reachable.sort((a, b) => {
+    const score = (candidate: typeof a) =>
+      Math.abs((candidate.carryM || 0) - effectiveDistanceM) +
+      (candidate.severeMissRate || 0) * effectiveDistanceM * 0.5 +
+      (1 - (candidate.playableRate || 0)) * effectiveDistanceM * 0.15;
+    return score(a) - score(b);
+  });
+  const best = distanceFirst[0] || usable.sort((a, b) => (b.utility || -Infinity) - (a.utility || -Infinity))[0];
   if (!best) return { targetDistanceM, effectiveDistanceM, lie, candidates, reasons: [], status: "no-suitable-club" };
   const reasons: CaddieReason[] = [];
   if (best.carryM !== undefined) reasons.push({ key: "adaptive-carry", label: "Carry", value: `${best.carryM}m carry`, tone: "positive" });
   if (best.playableRate !== undefined) reasons.push({ key: "adaptive-playable", label: "Playable", value: `${Math.round(best.playableRate * 100)}% playable`, tone: "positive" });
   if (best.severeMissRate !== undefined) reasons.push({ key: "adaptive-severe", label: "Severe miss", value: `${Math.round(best.severeMissRate * 100)}% severe miss`, tone: best.severeMissRate > 0.15 ? "warning" : "neutral" });
-  reasons.push({ key: "adaptive-fit", label: "Reason", value: best.carryM && best.carryM < effectiveDistanceM ? "Best fit for playing distance" : "Best distance/risk balance", tone: "positive" });
+  reasons.push({ key: "adaptive-fit", label: "Reason", value: best.carryM && best.carryM >= effectiveDistanceM ? "Shortest reliable club that reaches" : "Best available distance/risk balance", tone: "positive" });
   const adjustment = getOnCourseClubAdjustment(rounds, best.club, best.carryM);
   if (adjustment.adjustmentM) reasons.push({ key: "on-course-adjustment", label: "Recent rounds", value: adjustment.reason, tone: "neutral" });
   return { recommendedClub: best.club, targetDistanceM, effectiveDistanceM, lie, candidates, reasons, status: "recommended" };
@@ -1293,7 +1343,7 @@ export function recommendation(rounds: Round[]) {
 
 export function practicePriorities(
   rounds: Round[],
-  readings: RangeReading[],
+  _readings: RangeReading[],
 ): PracticePriority[] {
   const recent = rounds
     .filter((round) => round.status === "archived")
@@ -1377,23 +1427,12 @@ export function practicePriorities(
       current.impact += Math.max(1, score - 4);
       groups.set(key, current);
     });
-  const risk = new Map<string, { bad: number; total: number }>();
-  readings.forEach((reading) => {
-    const item = risk.get(reading.club) || { bad: 0, total: 0 };
-    item.total += 1;
-    if (reading.playable === false || reading.severeMiss) item.bad += 1;
-    risk.set(reading.club, item);
-  });
   return [...groups.values()]
     .map((item) => {
-      const clubRisk = item.club ? risk.get(item.club) : undefined;
-      const playable = clubRisk?.total
-        ? ` ${Math.round((1 - clubRisk.bad / clubRisk.total) * 100)}% playable in range data.`
-        : "";
       return {
         ...item,
         key: `${item.phase}|${item.club || "legacy"}|${item.outcome}`,
-        evidence: `${item.club ? `${item.club} ` : ""}${item.outcome.toLowerCase()} ${item.count} time${item.count === 1 ? "" : "s"} in recent rounds.${playable}`,
+        evidence: `${item.club ? `${item.club} ` : ""}${item.outcome.toLowerCase()} ${item.count} time${item.count === 1 ? "" : "s"} in recent rounds.`,
         drill: issueLabel(item.phase, item.outcome, item.club),
         clubGroup: clubGroupForPractice(item.club, item.phase),
         phaseLabel: phaseLabelForPractice(item.phase),

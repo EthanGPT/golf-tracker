@@ -18,8 +18,6 @@ import {
   CLUBS,
   DEFAULT_BAG,
   DISTANCE_CLUBS,
-  caddiePlan,
-  isTeeTargetReachable,
   adaptiveCaddieDecision,
   resolveTeeDecision,
   isValidGolfShotContext,
@@ -82,8 +80,6 @@ import type { Session } from "@supabase/supabase-js";
 import {
   HERMANUS_LOOPS,
   getCourse,
-  generateTeeLandingCandidates,
-  selectReachableTeeLandingCandidate,
   getHoleTeeOrigin,
   getTeeTarget,
   getHoleTarget,
@@ -134,6 +130,7 @@ function App() {
   const rangeGuideSeenRef = useRef(false);
   const roundGuideSeenRef = useRef(false);
   const cloudReadySessionRef = useRef<string | null>(null);
+  const restoredRoundOnStartupRef = useRef(false);
   const [screen, setScreen] = useState<Screen>(
     () =>
       (localStorage.getItem("golf-tracker-screen") as Screen) || "distances",
@@ -274,10 +271,27 @@ function App() {
           }
         }
         if (!cloudData) localStorage.removeItem(ROUND_DRAFT_KEY);
-        setData(authoritativeData);
+        const hasExistingAccountData = authoritativeData.readings.length > 0 ||
+          authoritativeData.rounds.length > 0 ||
+          authoritativeData.handicapHistory.length > 0 ||
+          Boolean(authoritativeData.homeCourseId || authoritativeData.playerGoals?.length);
+        const restoredData = hasExistingAccountData && !authoritativeData.onboardingComplete
+          ? { ...authoritativeData, onboardingComplete: true }
+          : authoritativeData;
+        setData(restoredData);
+        const inProgress = restoredData.rounds
+          .filter((round) => round.status === "in-progress" && round.holes.some((hole) => hole.score > 0))
+          .sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0];
+        if (inProgress) {
+          setRoundDraft(inProgress);
+          setScreen("round");
+          setRoundSetupOpen(false);
+          setRoundHasStarted(true);
+          restoredRoundOnStartupRef.current = true;
+        }
         cloudReadySessionRef.current = session.user.id;
         setDataReady(true);
-        setShowOnboarding(!authoritativeData.onboardingComplete && localStorage.getItem(`golf-tracker-onboarding-${session.user.id}`) !== "complete");
+        setShowOnboarding(!restoredData.onboardingComplete && localStorage.getItem(`golf-tracker-onboarding-${session.user.id}`) !== "complete");
       }
     })().catch((error) => {
       if (!cancelled)
@@ -315,6 +329,13 @@ function App() {
     setData(seedData());
     setDataReady(true);
   }, [authReady, session, data]);
+  useEffect(() => {
+    if (restoredRoundOnStartupRef.current || !dataReady || !roundDraft || roundDraft.status !== "in-progress" || !roundDraft.holes.some((hole) => hole.score > 0)) return;
+    setScreen("round");
+    setRoundSetupOpen(false);
+    setRoundHasStarted(true);
+    restoredRoundOnStartupRef.current = true;
+  }, [dataReady, roundDraft?.id, roundDraft?.status]);
   useEffect(() => {
     const retry = () => {
       if (navigator.onLine && isSyncPending())
@@ -473,7 +494,16 @@ function App() {
           item.holeNumber === holeNumber ? hole : item,
         )
       : [...roundDraft.holes, hole];
-    const updated = { ...roundDraft, holes, status: "in-progress" as const };
+    const savedIndex = sequence.indexOf(holeNumber);
+    const updated = {
+      ...roundDraft,
+      holes,
+      currentHoleIndex: Math.min(
+        Math.max(0, savedIndex + 1),
+        Math.max(0, sequence.length - 1),
+      ),
+      status: "in-progress" as const,
+    };
     const archived = data.rounds.find((round) => round.id === updated.id && round.status === "archived");
     if (archived) {
       setRoundDraft(null);
@@ -1057,7 +1087,7 @@ function Today({
   const practiceFocus = Array.from({ length: practiceCount }, (_, index) => [
     `practiceSession:${index}`,
     weeklyPriorities[index]
-      ? `${weeklyPriorities[index].drill} · ${weeklyPriorities[index].clubGroup}`
+      ? `${weeklyPriorities[index].phaseLabel} · ${weeklyPriorities[index].club || weeklyPriorities[index].clubGroup}`
       :
       fallbackPractice[(index + fallbackRotation) % fallbackPractice.length][0],
     weeklyPriorities[index]
@@ -2845,58 +2875,22 @@ function RoundMode({
   const selectedHolePar = holePar(holeNumber, courseId);
   const importedTeeOrigin = getHoleTeeOrigin(courseId, holeNumber, draft.tee || "white");
   const teeOrigin = currentHole.teeOrigin || importedTeeOrigin;
-  const teePlan = caddiePlan(readings, selectedHolePar, holeDistance(holeNumber, draft.tee || "white", courseId));
-  const courseHole = getCourse(courseId)?.holes.find((hole) => hole.number === holeNumber);
-  const teeTarget = (() => {
-    if (!teeOrigin || !courseHole) return getTeeTarget(courseId, holeNumber, draft.tee || "white");
-    if (selectedHolePar === 3) return getTeeTarget(courseId, holeNumber, draft.tee || "white");
-    const candidates = generateTeeLandingCandidates({
-      teeOrigin,
-      centreline: courseHole.centreline,
-      hazards: courseHole.hazards,
-      greenCentre: courseHole.green?.centre,
-      maxDistanceM: (teePlan?.tee.carry || 0) + 30,
-    });
-    const carry = teePlan?.tee.carry;
-    if (!carry || !candidates.length) return undefined;
-    const effectiveDistance = (candidate: (typeof candidates)[number]) => {
-      const wind = weather ? calculateShotWind(weather, candidate.bearingDeg) : undefined;
-      return calculateWindAdjustedDistance(candidate.distanceFromTeeM, wind)?.effectiveDistanceM || candidate.distanceFromTeeM;
-    };
-    const fitCandidates = candidates.filter((candidate) =>
-      isTeeTargetReachable(readings, teePlan!.tee.club, effectiveDistance(candidate)),
-    );
-    const selected = selectReachableTeeLandingCandidate(
-      fitCandidates,
-      carry,
-      effectiveDistance,
-      Number.POSITIVE_INFINITY,
-    );
-    const reachable = selected;
-    return reachable
-      ? {
-          position: reachable.candidate.position,
-          targetType: "target" as const,
-          name: "Fairway target",
-        }
-      : undefined;
-  })();
-  const windTarget = teeTarget || getTeeTarget(courseId, holeNumber, draft.tee || "white");
+  const teeTarget = getTeeTarget(courseId, holeNumber, draft.tee || "white");
+  const windTarget = teeTarget;
+  const holePlayingDistance = holeDistance(holeNumber, draft.tee || "white", courseId);
   const teeWind = teeOrigin && windTarget && weather
     ? calculateShotWind(weather, bearingBetween(teeOrigin, windTarget.position))
     : undefined;
-  const scorecardDistance = holeDistance(holeNumber, draft.tee || "white", courseId);
-  const teeAdjustment = teeWind && teeTarget
+  const scorecardDistance = holePlayingDistance;
+  const teeAdjustment = teeWind
     ? calculateWindAdjustedDistance(scorecardDistance, teeWind)
     : undefined;
   const teeDecision = resolveTeeDecision(
     readings,
     selectedHolePar,
     selectedHolePar === 3
-      ? teeAdjustment?.effectiveDistanceM || holeDistance(holeNumber, draft.tee || "white", courseId)
-      : teeTarget
-        ? calculateWindAdjustedDistance(distanceBetweenMeters(teeOrigin!, teeTarget.position), teeWind)?.effectiveDistanceM || distanceBetweenMeters(teeOrigin!, teeTarget.position)
-        : holeDistance(holeNumber, draft.tee || "white", courseId),
+      ? teeAdjustment?.effectiveDistanceM || holePlayingDistance
+      : holePlayingDistance,
     rounds,
     { courseId, holeNumber, tee: draft.tee || "white" },
   );
@@ -2997,7 +2991,7 @@ function RoundMode({
       <div className="compact-hole-header">
         <strong>Hole {holeNumber}</strong>
         <span>Par {selectedHolePar}</span>
-        <span>{holeDistance(holeNumber, draft.tee || "white", courseId)}m</span>
+        <span>{holePlayingDistance}m</span>
         <small>
           {completed}/{length}
         </small>
@@ -3006,8 +3000,6 @@ function RoundMode({
           <Caddie
             readings={readings}
             teeWind={teeWind}
-          teeTargetName={teeTarget?.name}
-          teeTargetDistance={selectedHolePar === 3 ? scorecardDistance : teeTarget ? Math.round(distanceBetweenMeters(teeOrigin!, teeTarget.position)) : undefined}
           teeDecision={teeDecision}
           teePositionStatus={teePositionStatus}
           onCaptureTeeOrigin={async () => {
@@ -3180,17 +3172,20 @@ function RoundMode({
         <ShotGroups
           bag={bag}
           shots={currentHole.shots || []}
-          setShots={(shots) => updateHole({ shots })}
-          onOutcome={(phase, note, selected) => {
-            if (selected && ((phase === "tee" && note === "Hit green") || (phase === "approach" && note === "Hit green") || (phase === "short-game" && note === "Good chip on"))) updateHole({ onGreen: true });
-          }}
+          setShots={(shots) => updateHole({
+            shots,
+            onGreen: shots.some((shot) =>
+              (shot.phase === "tee" && shot.outcomes?.some((outcome) => outcome.outcome === "good" && outcome.note === "Hit green")) ||
+              (shot.phase === "approach" && shot.outcomes?.some((outcome) => outcome.outcome === "good" && outcome.note === "Hit green")) ||
+              (shot.phase === "short-game" && shot.outcomes?.some((outcome) => outcome.outcome === "good" && outcome.note === "Good chip on")),
+            ),
+          })}
           teeDefault={teeDecision?.club}
           defaultClub={currentHole.latestShotContext?.lie ? (() => {
             const wind = calculateShotWind(weather, currentHole.latestShotContext!.shotBearingDeg);
             const adjustment = calculateWindAdjustedDistance(currentHole.latestShotContext!.distanceToTargetM, wind);
               return adaptiveCaddieDecision(readings, bag, currentHole.latestShotContext!.distanceToTargetM, adjustment?.effectiveDistanceM || currentHole.latestShotContext!.distanceToTargetM, currentHole.latestShotContext!.lie, holeDistance(holeNumber, draft.tee || "white", courseId), currentHole.latestShotContext!.position.accuracyM, rounds, { courseId, holeNumber, tee: draft.tee || "white" }).recommendedClub;
           })() : undefined}
-          putting={currentHole.onGreen === true}
           par={selectedHolePar}
         />
       </section>
@@ -3233,16 +3228,12 @@ function RoundMode({
 function Caddie({
   readings,
   teeWind,
-  teeTargetName,
-  teeTargetDistance,
   teeDecision,
   teePositionStatus,
   onCaptureTeeOrigin,
 }: {
   readings: AppData["readings"];
   teeWind?: ReturnType<typeof calculateShotWind>;
-  teeTargetName?: string;
-  teeTargetDistance?: number;
   teeDecision?: ReturnType<typeof resolveTeeDecision>;
   teePositionStatus?: string;
   onCaptureTeeOrigin?: () => Promise<void>;
@@ -3255,7 +3246,7 @@ function Caddie({
     const earlyClubs = [...new Set(readings.map((reading) => reading.club))]
       .map((club) => ({ club, summary: clubSummary(readings, club) }))
       .filter((item) => item.summary.typical !== undefined)
-      .sort((a, b) => Math.abs((a.summary.typical || 0) - (teeTargetDistance || 0)) - Math.abs((b.summary.typical || 0) - (teeTargetDistance || 0)));
+      .sort((a, b) => (a.summary.typical || 0) - (b.summary.typical || 0));
     const earlyClub = earlyClubs[0];
     if (!earlyClub) return <section className="caddie caddie-empty"><span className="caddie-title">TEE CADDIE</span><span className="eyebrow">BUILD YOUR CLUB DATA</span><b>Hit the range first</b><small>Record a club carry to unlock an early recommendation.</small></section>;
     return <section className="caddie caddie-early"><span className="caddie-title">TEE CADDIE</span><span className="eyebrow">EARLY RECOMMENDATION</span><b>{clubDisplayLabel(earlyClub.club)}</b><small>{Math.round(earlyClub.summary.typical!)}m carry · limited personal data</small>{teeWind && <small className="caddie-weather">{teeWind.label || `${Math.round(teeWind.windSpeedKmh)} km/h wind`} · wind-adjusted</small>}</section>;
@@ -3271,8 +3262,8 @@ function Caddie({
       <span className="caddie-title">TEE CADDIE</span>
       <span className="eyebrow">BEST TEE CLUB</span>
       <b>{clubDisplayLabel(teeDecision.club)}</b>
-      {teeTargetName && teeTargetDistance !== undefined && (
-        <small>{teeTargetName} · {teeTargetDistance}m</small>
+      {teeDecision.plan.tee.carry !== undefined && (
+        <small>{Math.round(teeDecision.plan.tee.carry)}m typical carry</small>
       )}
       {decision?.reasons.find((reason) => reason.key === "primary-playable")?.value && (
         <small>{decision.reasons.find((reason) => reason.key === "primary-playable")?.value} playable</small>
@@ -3361,6 +3352,7 @@ function ShotGroups({
 }) {
   const [activePhase, setActivePhase] = useState<ShotPhase | null>(null);
   const activeGroupRef = useRef<HTMLDivElement | null>(null);
+  const previousPutting = useRef(false);
   const refocusSelector = () => {
     window.setTimeout(() => {
       activeGroupRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -3472,13 +3464,12 @@ function ShotGroups({
     let nextShots = additions.length
       ? [...shots, ...additions.map(([phase, club]) => ({ id: crypto.randomUUID(), phase: phase as ShotPhase, club: club as string }))]
       : shots;
-    if (teeDefault) {
-      const syncedShots = nextShots.map((shot) => shot.phase === "tee" && !("outcomes" in shot && shot.outcomes?.length) && !("note" in shot && shot.note) && shot.club !== teeDefault ? { ...shot, club: teeDefault } : shot);
-      if (syncedShots.some((shot, index) => shot !== nextShots[index])) nextShots = syncedShots;
+    if (putting && !nextShots.some((shot) => shot.phase === "putting")) {
+      nextShots = ensurePuttingShot(nextShots);
     }
-    if (putting) nextShots = ensurePuttingShot(nextShots);
     if (nextShots !== shots) setShots(nextShots);
-    if (putting) setActivePhase("putting");
+    if (putting && !previousPutting.current) setActivePhase("putting");
+    previousPutting.current = Boolean(putting);
   }, [teeDefault, defaultClub, putting, shots, setShots]);
   const toggle = (shotId: string, phase: ShotPhase, club: string) => {
     setActivePhase(phase);
@@ -3486,7 +3477,7 @@ function ShotGroups({
     const existing = shots.find((shot) => shot.id === shotId);
     if (!existing) return;
     if (existing.club === club)
-      return setShots(shots.filter((shot) => shot.id !== shotId));
+      return setShots(updateHoleShot(shots, shotId, { club: undefined }));
     setShots(updateHoleShot(shots, shotId, { club }));
   };
   const addShot = (phase: ShotPhase, club?: ClubName) => {
@@ -3558,6 +3549,14 @@ function ShotGroups({
                   <Fragment key={shot.id}>
                   <div className="shot-entry">
                     <small>{groupShots.length > 1 ? `${group.label} ${shotIndex + 1}` : group.label}</small>
+                    <button
+                      type="button"
+                      className="shot-clear-button"
+                      aria-label={`Clear ${group.label} ${shotIndex + 1}`}
+                      onClick={() => setShots(shots.filter((item) => item.id !== shot.id))}
+                    >
+                      Clear
+                    </button>
                     <div>
                       {group.clubs.map((club) => (
                         <button
@@ -3582,7 +3581,20 @@ function ShotGroups({
                     </div>
                   )}
                   </Fragment>
-                ) : null)}
+                ) : (
+                  <Fragment key={shot.id}>
+                    <div className="shot-entry">
+                      <small>{groupShots.length > 1 ? `Putt ${shotIndex + 1}` : "Putt"}</small>
+                      <div className="shot-outcomes">
+                        {outcomeOptions.putting.good.concat(outcomeOptions.putting.bad).map((note) => {
+                          const outcome = outcomeOptions.putting.good.includes(note) ? "good" : "bad";
+                          const selected = (shot.outcomes || (shot.note ? [{ outcome: shot.outcome || "bad", note: shot.note }] : [])).some((item) => item.outcome === outcome && item.note === note);
+                          return <button type="button" key={note} className={selected ? `selected ${outcome}` : ""} onClick={() => setOutcome(shot.id, "putting", outcome, note)}>{outcome === "good" ? "✓" : "×"} {note}</button>;
+                        })}
+                      </div>
+                    </div>
+                  </Fragment>
+                ))}
                 {!groupShots.length && group.phase !== "putting" && (
                   <div className="shot-first-club-choice">
                     {group.clubs.map((club) => <button type="button" key={club} onClick={(event) => { event.stopPropagation(); addShot(group.phase, club); }}>{club}</button>)}

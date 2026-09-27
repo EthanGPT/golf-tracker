@@ -164,6 +164,30 @@ describe("distance calculations", () => {
     expect(clubSummary(readings, "6i").max).toBe(160);
   });
 
+  it("gives the newest ten usable shots extra influence", () => {
+    const readings = [
+      ...Array.from({ length: 10 }, (_, index) => ({
+        id: `old-${index}`,
+        club: "6i" as const,
+        distanceMetres: 150,
+        mishit: false,
+        sessionDate: "2026-09-01",
+        createdAt: `2026-09-${String(index + 1).padStart(2, "0")}`,
+        severeMiss: false,
+      })),
+      ...Array.from({ length: 6 }, (_, index) => ({
+        id: `new-${index}`,
+        club: "6i" as const,
+        distanceMetres: 175,
+        mishit: false,
+        sessionDate: "2026-09-20",
+        createdAt: `2026-09-${String(index + 20).padStart(2, "0")}`,
+        severeMiss: false,
+      })),
+    ];
+    expect(clubSummary(readings, "6i").typical).toBe(175);
+  });
+
   it("fits tee targets to observed usable carry ranges", () => {
     const readings = [142, 148, 160].map((distanceMetres, index) => ({
       id: `range-${index}`,
@@ -341,6 +365,19 @@ describe("adaptive live caddie", () => {
     expect(adaptiveCaddieDecision(wedgeReadings, ["PW"], 27, 27, "fairway", 450).recommendedClub).toBe("PW");
   });
 
+  it("chooses the shortest reliable club that reaches an approach target", () => {
+    const approachReadings = [
+      { id: "6i", club: "6i" as const, distanceMetres: 155, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-20", createdAt: "2026-09-20" },
+      { id: "7i", club: "7i" as const, distanceMetres: 145, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-20", createdAt: "2026-09-20" },
+      { id: "8i", club: "8i" as const, distanceMetres: 135, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-20", createdAt: "2026-09-20" },
+      { id: "3W", club: "3W" as const, distanceMetres: 190, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-20", createdAt: "2026-09-20" },
+    ];
+    const result = adaptiveCaddieDecision(approachReadings, ["3W", "6i", "7i", "8i"], 136, 136, "fairway", 450);
+    expect(result.recommendedClub).toBe("7i");
+    expect(result.reasons.find((reason) => reason.key === "adaptive-fit")?.value).toContain("reaches");
+    expect(result.candidates.find((candidate) => candidate.club === "3W")?.excluded).toBeUndefined();
+  });
+
   it("prefers SW for chip-type greenside shots and PW for longer pitches", () => {
     const wedges = [
       ...readings,
@@ -349,6 +386,14 @@ describe("adaptive live caddie", () => {
     ];
     expect(adaptiveCaddieDecision(wedges, ["PW", "SW"], 20, 20, "rough").recommendedClub).toBe("SW");
     expect(adaptiveCaddieDecision(wedges, ["PW", "SW"], 70, 70, "rough").recommendedClub).toBe("PW");
+  });
+
+  it("prefers a reachable SW throughout the close-range window", () => {
+    const wedges = [
+      ...Array.from({ length: 5 }, (_, index) => ({ id: `sw-${index}`, club: "SW" as const, distanceMetres: 85, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-19", createdAt: `2026-09-2${index}` })),
+      ...Array.from({ length: 5 }, (_, index) => ({ id: `pw-${index}`, club: "PW" as const, distanceMetres: 100, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-19", createdAt: `2026-09-1${index}` })),
+    ];
+    expect(adaptiveCaddieDecision(wedges, ["PW", "SW"], 70, 70, "rough").recommendedClub).toBe("SW");
   });
 
   it("allows strong personal greenside evidence to override the default", () => {
