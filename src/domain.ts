@@ -592,7 +592,7 @@ export type PracticePriority = {
 };
 
 function clubGroupForPractice(club: ClubName | undefined, phase: ShotPhase) {
-  if (!club && phase === "tee") return "Driver/Woods" as const;
+  if (!club && phase === "tee") return "Club not recorded" as const;
   if (!club && phase === "approach") return "Irons" as const;
   if (!club && phase === "short-game") return "Wedges" as const;
   if (!club && phase === "recovery") return "Club not recorded" as const;
@@ -1422,9 +1422,19 @@ export function practicePriorities(
       };
       current.count += 1;
       current.impact += Math.max(1, score - 4);
-      groups.set(key, current);
-    });
+    groups.set(key, current);
+  });
+  // Do not keep recommending a club-specific practice priority after the
+  // player has stopped using that club. Older evidence is still useful in the
+  // history, but it should not drive the next practice session.
+  const activeRecentClubs = new Set(
+    recent
+      .slice(-3)
+      .flatMap((round) => round.holes.flatMap((hole) => (hole.shots || []).map((shot) => shot.club).filter(Boolean))),
+  );
   return [...groups.values()]
+    .filter((item) => !(item.phase === "tee" && !item.club))
+    .filter((item) => !item.club || activeRecentClubs.has(item.club))
     .map((item) => {
       return {
         ...item,

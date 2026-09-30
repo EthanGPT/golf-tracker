@@ -912,6 +912,54 @@ select:focus {
   padding: 14px 0 0;
   margin-top: 13px;
 }
+.plan-item-wrap {
+  border-top: 1px solid #e8ede5;
+  margin-top: 13px;
+}
+.plan-item-wrap .plan-item {
+  border-top: 0;
+  margin-top: 0;
+}
+.training-recommendation-button {
+  margin-left: auto;
+  flex: 0 0 auto;
+  border: 1px solid #c8d5c0;
+  border-radius: 999px;
+  padding: 7px 9px;
+  background: #f3f7f0;
+  color: var(--forest);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.training-recommendation-button:hover,
+.training-recommendation-button:focus-visible {
+  background: #e3ebdb;
+}
+.training-recommendation {
+  margin: 0 0 2px 31px;
+  padding: 11px 12px;
+  border-radius: 8px;
+  background: #f3f7f0;
+}
+.training-recommendation > .eyebrow {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 9px;
+}
+.training-recommendation-option {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  border-top: 1px solid #dfe8da;
+  font-size: 12px;
+}
+.training-recommendation-option small {
+  color: var(--muted);
+  white-space: nowrap;
+}
 .plan-item span {
   display: grid;
   gap: 3px;

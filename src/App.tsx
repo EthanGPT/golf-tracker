@@ -1045,6 +1045,7 @@ function Today({
   togglePracticeSession: (index: number) => void;
   toggleRoundSession: (index: number) => void;
 }) {
+  const [puttingRecommendationKey, setPuttingRecommendationKey] = useState<string | null>(null);
   const practiceCount = data.practiceFrequency?.practiceSessionsPerWeek ?? 2;
   const week = [
     ...Array.from(
@@ -1074,7 +1075,6 @@ function Today({
     ["Putting session", "Work on pace and first-putt distance control."],
     ["Short-game session", "Build touch around the green."],
     ["Approach distance session", "Calibrate your scoring irons."],
-    ["Course-management session", "Play a round and record decisions."],
   ];
   const distinctPriorities = rec.priorities.filter((priority, index, priorities) =>
     priorities.findIndex((candidate) => candidate.phaseLabel === priority.phaseLabel) === index,
@@ -1083,18 +1083,63 @@ function Today({
   const weeklyPriorities = distinctPriorities.length
     ? [...distinctPriorities.slice(priorityRotation), ...distinctPriorities.slice(0, priorityRotation)]
     : distinctPriorities;
-  const fallbackRotation = (data.weeklyHistory?.length || 0) % fallbackPractice.length;
+  const coveredPracticeAreas = new Set(weeklyPriorities.map((priority) => priority.phaseLabel));
+  const availableFallbackPractice = fallbackPractice.filter(([title]) =>
+    !((title.includes("Putting") && coveredPracticeAreas.has("Putting")) ||
+      (title.includes("Short-game") && coveredPracticeAreas.has("Short game")) ||
+      (title.includes("Approach") && coveredPracticeAreas.has("Approach"))),
+  );
+  const fallbackOptions = availableFallbackPractice.length ? availableFallbackPractice : fallbackPractice;
+  const fallbackRotation = (data.weeklyHistory?.length || 0) % fallbackOptions.length;
   const practiceFocus = Array.from({ length: practiceCount }, (_, index) => [
     `practiceSession:${index}`,
     weeklyPriorities[index]
       ? `${weeklyPriorities[index].phaseLabel} · ${weeklyPriorities[index].club || weeklyPriorities[index].clubGroup}`
       :
-      fallbackPractice[(index + fallbackRotation) % fallbackPractice.length][0],
+      fallbackOptions[(index + fallbackRotation) % fallbackOptions.length][0],
     weeklyPriorities[index]
-      ? `${weeklyPriorities[index].phaseLabel} · ${weeklyPriorities[index].evidence}`
+      ? weeklyPriorities[index].evidence
       :
-      fallbackPractice[(index + fallbackRotation) % fallbackPractice.length][1],
+      fallbackOptions[(index + fallbackRotation) % fallbackOptions.length][1],
   ]);
+  const trainingRecommendations = {
+    putting: {
+      label: "PUTTING RECOMMENDATIONS",
+      options: [
+        ["10Min Short Putt (1–2M)", "3 balls"],
+        ["20Min Distance Control (4–10M)", "3 balls"],
+        ["10Min Long Putts (10–20M)", "1 ball"],
+        ["5Min Pressure Finish (1.5M)", "1 ball"],
+      ],
+    },
+    shortGame: {
+      label: "SHORT GAME RECOMMENDATIONS",
+      options: [
+        ["10Min Chip Landing Spots (5–15M)", "5 balls"],
+        ["10Min Mixed Chip Distances", "6 balls"],
+        ["10Min Pitch Shot Control (20–40M)", "5 balls"],
+        ["15Min Up-and-Down Challenge", "1 ball per attempt"],
+      ],
+    },
+    approach: {
+      label: "APPROACH RECOMMENDATIONS",
+      options: [
+        ["10Min Wedge Distance Control (30–70M)", "5 balls"],
+        ["10Min Short Iron Accuracy (80–120M)", "5 balls"],
+        ["15Min Mid-Iron Distance Control (120–160M)", "5 balls"],
+        ["10Min Random Approach Distances", "1 ball per target"],
+      ],
+    },
+    tee: {
+      label: "TEE CONTROL RECOMMENDATIONS",
+      options: [
+        ["10Min Driver Start Line", "5 balls"],
+        ["15Min Driver Accuracy Challenge", "10 balls"],
+        ["10Min Fairway-Finder Practice", "5 balls"],
+        ["5Min 3W / Hybrid Comparison", "5 balls · optional"],
+      ],
+    },
+  } as const;
   return (
     <div className="stack fade-in today-screen">
       <section className="intro">
@@ -1187,8 +1232,67 @@ function Today({
               "Play and reflect",
             ],
           ),
-        ].map(([key, title, detail]) => (
-          <label className="plan-item" key={key}>
+        ].map(([key, title, detail]) => {
+          const sessionText = `${title} ${detail}`;
+          const teeClub = sessionText.match(/\b(Dr|3W|4W-Hybrid|5W|[2-9]i|PW|AW|GW|SW)\b/)?.[1];
+          const recommendationType = key.startsWith("practiceSession:")
+            ? /putt|putting/i.test(sessionText)
+              ? "putting"
+              : /short game|chip|pitch|bunker/i.test(sessionText)
+                ? "shortGame"
+                : /approach|wedge|iron/i.test(sessionText)
+                  ? "approach"
+                  : /tee|driver|fairway|hybrid/i.test(sessionText)
+                    ? "tee"
+                    : null
+            : null;
+          const recommendationClub = teeClub || sessionText.match(/\b(Dr|3W|4W-Hybrid|5W|[2-9]i|PW|AW|GW|SW)\b/)?.[1];
+          const hasTargetedRecommendation = Boolean(recommendationClub) || (recommendationType === "putting" && /Putter/i.test(sessionText));
+          const recommendation = hasTargetedRecommendation && recommendationType ? trainingRecommendations[recommendationType] : null;
+          const recommendationLabel = recommendationType && recommendation
+            ? `${recommendationClub ? `${recommendationClub} ` : ""}${recommendation.label}`
+            : undefined;
+          const directionalMiss = /left|right|hook|slice|direction|start line/i.test(sessionText);
+          const missDirection = sessionText.match(/left|right|hook|slice/i)?.[0].toLowerCase();
+          const approachClubNumber = recommendationClub?.match(/^([2-9])i$/)?.[1];
+          const approachOptions = recommendationClub && recommendationType === "approach"
+            ? approachClubNumber && Number(approachClubNumber) <= 7
+                ? directionalMiss
+                ? [
+                  [`10Min ${recommendationClub} Start Line Control${missDirection ? ` (${missDirection} miss)` : ""}`, "5 balls"],
+                  [`10Min ${recommendationClub} Target Green Accuracy`, "5 balls"],
+                  ["10Min Random Approach Distances", "1 ball per target"],
+                ]
+                : [
+                  ["15Min Mid-Iron Distance Control (120–160M)", "5 balls"],
+                  [`10Min ${recommendationClub} Target Green Accuracy`, "5 balls"],
+                  ["10Min Random Approach Distances", "1 ball per target"],
+                ]
+              : approachClubNumber
+                ? directionalMiss
+                  ? [
+                    [`10Min ${recommendationClub} Start Line Control${missDirection ? ` (${missDirection} miss)` : ""}`, "5 balls"],
+                    [`10Min ${recommendationClub} Target Green Accuracy`, "5 balls"],
+                    ["10Min Random Approach Distances", "1 ball per target"],
+                  ]
+                  : [
+                    ["10Min Short Iron Accuracy (80–120M)", "5 balls"],
+                    [`10Min ${recommendationClub} Target Green Accuracy`, "5 balls"],
+                    ["10Min Random Approach Distances", "1 ball per target"],
+                  ]
+                : recommendation?.options
+            : recommendation?.options;
+          const recommendationOptions = recommendationType === "approach"
+            ? approachOptions
+            : recommendationType === "tee" && teeClub
+            ? recommendation?.options
+              .filter(([name]) => !name.startsWith("5Min 3W" ) || /^(Dr|3W|4W-Hybrid|5W)$/.test(teeClub))
+              .map(([name, balls]) => [name.replace("Driver", teeClub), balls] as const)
+            : recommendation?.options;
+          const recommendationOpen = puttingRecommendationKey === key;
+          return (
+          <div className={`plan-item-wrap ${recommendationOpen ? "recommendation-open" : ""}`} key={key}>
+          <label className="plan-item">
             <input
               type="checkbox"
               checked={
@@ -1226,8 +1330,33 @@ function Today({
               <strong>{title}</strong>
               <small>{detail}</small>
             </span>
+            {recommendation && (
+              <button
+                type="button"
+                className="training-recommendation-button"
+                aria-expanded={recommendationOpen}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setPuttingRecommendationKey(recommendationOpen ? null : key);
+                }}
+              >
+                {recommendationOpen ? "Hide" : "Recommendation"}
+              </button>
+            )}
           </label>
-        ))}
+          {recommendationOpen && recommendation && (
+            <div className="training-recommendation" role="note">
+              <span className="eyebrow">{recommendationLabel}</span>
+              {recommendationOptions?.map(([name, balls]) => (
+                <div className="training-recommendation-option" key={name}>
+                  <strong>{name}</strong><small>{balls}</small>
+                </div>
+              ))}
+            </div>
+          )}
+          </div>
+        );})}
       </section>
     </div>
   );
