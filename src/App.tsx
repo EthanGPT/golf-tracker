@@ -282,8 +282,17 @@ function App() {
         const inProgress = restoredData.rounds
           .filter((round) => round.status === "in-progress" && round.holes.some((hole) => hole.score > 0))
           .sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0];
-        if (inProgress) {
-          setRoundDraft(inProgress);
+        let savedDraft: AppData["rounds"][number] | null = null;
+        try {
+          const rawDraft = localStorage.getItem(ROUND_DRAFT_KEY);
+          const parsed = rawDraft ? JSON.parse(rawDraft) as AppData["rounds"][number] : null;
+          if (parsed?.status === "in-progress" && parsed.id === inProgress?.id) savedDraft = parsed;
+        } catch {
+          // Ignore a malformed draft and fall back to the authoritative round.
+        }
+        const restoredDraft = savedDraft || inProgress;
+        if (restoredDraft) {
+          setRoundDraft(restoredDraft);
           setScreen("round");
           setRoundSetupOpen(false);
           setRoundHasStarted(true);
@@ -444,7 +453,9 @@ function App() {
       !data.rounds.some((round) => round.id === activeDraft.id && round.status === "archived")
       ? activeDraft
       : undefined;
-    const unfinished = resumable[0] || draftResumable;
+    // A round draft includes unsaved shot edits; app data only changes when a
+    // hole is saved. Prefer it so resuming cannot resurrect stale caddie data.
+    const unfinished = draftResumable || resumable[0];
     const next = unfinished
       ? unfinished.courseId || unfinished.courseName?.toLowerCase().includes("hermanus")
         ? { ...unfinished, courseId: unfinished.courseId || "hermanus-golf-club", handicapIndex: roundHandicapIndex(currentHandicap, unfinished.handicapIndex) }
@@ -494,10 +505,16 @@ function App() {
           item.holeNumber === holeNumber ? hole : item,
         )
       : [...roundDraft.holes, hole];
+    // Never carry holes from another loop/round into this round. In
+    // particular, the south loop starts at 10, so hole 1 is invalid there.
+    const validHoles = holes.filter((item, itemIndex, all) =>
+      sequence.includes(item.holeNumber) &&
+      all.findIndex((candidate) => candidate.holeNumber === item.holeNumber) === itemIndex,
+    );
     const savedIndex = sequence.indexOf(holeNumber);
     const updated = {
       ...roundDraft,
-      holes,
+      holes: validHoles,
       currentHoleIndex: Math.min(
         Math.max(0, savedIndex + 1),
         Math.max(0, sequence.length - 1),
@@ -2657,6 +2674,7 @@ function RoundDetail({
 }) {
   const [editing, setEditing] = useState(false);
   const [selectedHole, setSelectedHole] = useState<number | null>(null);
+  const [editedHoles, setEditedHoles] = useState(() => round.holes);
   const [scores, setScores] = useState(() => round.holes.map((hole) => hole.score));
   const [handicap, setHandicap] = useState<number | "">(roundHandicapIndex(latestHandicap, round.handicapIndex) ?? "");
   const score = round.totalScore || roundTotal(round);
@@ -2700,7 +2718,7 @@ function RoundDetail({
       </section>
       <button className={editing ? "edit-save-button" : "text-button"} onClick={() => {
         if (editing) {
-          const holes = round.holes.map((hole, index) => ({ ...hole, score: Math.max(1, Number(scores[index]) || holePar(hole.holeNumber, round.courseId)) }));
+          const holes = editedHoles.map((hole, index) => ({ ...hole, score: Math.max(1, Number(scores[index]) || holePar(hole.holeNumber, round.courseId)) }));
           const edited = { ...round, holes, handicapIndex: handicap === "" ? undefined : Number(handicap), status: "archived" as const };
           onSave({ ...edited, totalScore: roundTotal(edited) });
         }
@@ -2714,12 +2732,16 @@ function RoundDetail({
           <p>{Array.from(new Set(issues)).join(" · ")}</p>
         </section>
       )}
-      <ArchivedScorecard round={round} editingHole={editing ? selectedHole : null} onScoreChange={(holeNumber, value) => setScores((current) => current.map((score, index) => round.holes[index]?.holeNumber === holeNumber ? value : score))} onHoleTap={(holeNumber) => { setSelectedHole(holeNumber); setEditing(true); }} />
+      <ArchivedScorecard round={{ ...round, holes: editedHoles }} editingHole={editing ? selectedHole : null} onScoreChange={(holeNumber, value) => setScores((current) => current.map((score, index) => editedHoles[index]?.holeNumber === holeNumber ? value : score))} onHoleTap={(holeNumber) => { setSelectedHole(holeNumber); setEditing(true); }} onDeleteHole={(holeNumber) => {
+        setEditedHoles((current) => current.filter((hole) => hole.holeNumber !== holeNumber));
+        setScores((current) => current.filter((_, index) => editedHoles[index]?.holeNumber !== holeNumber));
+        setSelectedHole(null);
+      }} />
     </div>
   );
 }
 
-function ArchivedScorecard({ round, onHoleTap, editingHole, onScoreChange }: { round: AppData["rounds"][number]; onHoleTap?: (holeNumber: number) => void; editingHole?: number | null; onScoreChange?: (holeNumber: number, score: number) => void }) {
+function ArchivedScorecard({ round, onHoleTap, editingHole, onScoreChange, onDeleteHole }: { round: AppData["rounds"][number]; onHoleTap?: (holeNumber: number) => void; editingHole?: number | null; onScoreChange?: (holeNumber: number, score: number) => void; onDeleteHole?: (holeNumber: number) => void }) {
   const orderedHoles = [...round.holes].sort(
     (a, b) => a.holeNumber - b.holeNumber,
   );
@@ -2763,7 +2785,7 @@ function ArchivedScorecard({ round, onHoleTap, editingHole, onScoreChange }: { r
               const relative = hole.score - holePar(hole.holeNumber, round.courseId);
           const scoreClass = relative <= -2 ? "eagle" : relative === -1 ? "birdie" : relative === 0 ? "even" : relative === 1 ? "bogey" : "double-bogey";
           return (
-            <div className="scorecard-row" key={hole.holeNumber} role={onHoleTap ? "button" : undefined} tabIndex={onHoleTap ? 0 : undefined} onClick={() => onHoleTap?.(hole.holeNumber)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onHoleTap?.(hole.holeNumber); }}>
+            <div className="scorecard-row" key={hole.holeNumber} role={onHoleTap ? "button" : undefined} tabIndex={onHoleTap ? 0 : undefined} onClick={() => onHoleTap?.(hole.holeNumber)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onHoleTap?.(hole.holeNumber); }} onTouchStart={(event) => { if (!onDeleteHole) return; (event.currentTarget as HTMLElement).dataset.touchStartX = String(event.touches[0].clientX); }} onTouchEnd={(event) => { if (!onDeleteHole) return; const start = Number((event.currentTarget as HTMLElement).dataset.touchStartX); if (start - event.changedTouches[0].clientX > 80) onDeleteHole(hole.holeNumber); }}>
               <span className="scorecard-hole">{hole.holeNumber}</span>
               <span>{holePar(hole.holeNumber, round.courseId)}</span>
               <strong className={`scorecard-score ${scoreClass}`} title={relative < 0 ? (relative === -1 ? "Birdie" : "Eagle or better") : relative > 0 ? (relative === 1 ? "Bogey" : "Double bogey or worse") : "Par"}>
@@ -2999,8 +3021,11 @@ function RoundMode({
   const currentHole =
     draft.holes.find((hole) => hole.holeNumber === holeNumber) ||
     emptyHole(holeNumber);
-  const completed = draft.holes.filter((hole) => hole.score > 0).length;
   const courseId = draft.courseId || "hermanus-golf-club";
+  const completed = draft.holes.filter((hole) => hole.score > 0).length;
+  const scoreToPar = draft.holes
+    .filter((hole) => hole.score > 0)
+    .reduce((total, hole) => total + hole.score - holePar(hole.holeNumber, courseId), 0);
   const selectedHolePar = holePar(holeNumber, courseId);
   const importedTeeOrigin = getHoleTeeOrigin(courseId, holeNumber, draft.tee || "white");
   const teeOrigin = currentHole.teeOrigin || importedTeeOrigin;
@@ -3121,6 +3146,7 @@ function RoundMode({
         <strong>Hole {holeNumber}</strong>
         <span>Par {selectedHolePar}</span>
         <span>{holePlayingDistance}m</span>
+        {completed > 0 && <span className={`round-score-to-par ${scoreToPar < 0 ? "under" : scoreToPar > 0 ? "over" : "even"}`}>{scoreToPar === 0 ? "E" : scoreToPar > 0 ? `+${scoreToPar}` : scoreToPar}</span>}
         <small>
           {completed}/{length}
         </small>
