@@ -564,23 +564,26 @@ function App() {
       totalScore: roundTotal(source),
       archivedAt: new Date().toISOString(),
     };
+    const week = startOfWeek();
     updateData((current) => ({
       ...current,
       rounds: current.rounds.some((round) => round.id === updated.id) ? current.rounds.map((round) => round.id === updated.id ? updated : round) : [...current.rounds, updated],
-      weeklyPlan:
-        current.weeklyPlan.weekStart === startOfWeek()
-          ? { ...current.weeklyPlan, roundComplete: true }
-          : {
-              weekStart: startOfWeek(),
-              practiceAComplete: false,
-              practiceBComplete: false,
-              practiceCComplete: false,
-              roundComplete: true,
-            },
-      weeklyHistory:
-        current.weeklyPlan.weekStart === startOfWeek()
-          ? current.weeklyHistory
-          : [...(current.weeklyHistory || []), current.weeklyPlan],
+      // A completed scorecard is the boundary between training cycles. Keep
+      // the plan that led into the round, then start the next cycle unticked.
+      weeklyPlan: {
+        weekStart: week,
+        practiceAComplete: false,
+        practiceBComplete: false,
+        practiceCComplete: false,
+        practiceSessionsComplete: [],
+        roundsComplete: [],
+        roundComplete: false,
+      },
+      weeklyHistory: [...(current.weeklyHistory || []), {
+        ...current.weeklyPlan,
+        weekStart: current.weeklyPlan.weekStart || week,
+        roundComplete: true,
+      }],
     }));
     setRoundDraft(null);
     setRoundSetupOpen(true);
@@ -1733,8 +1736,8 @@ function ClubFormPanel({ readings, rounds }: { readings: AppData["readings"]; ro
         (index + 1)) *
       100,
   );
-  const average = carryTrend.at(-1);
-  const change = carryTrend.length > 1 ? average! - carryTrend[0] : undefined;
+  const average = club ? clubSummary(readings, club).typical : undefined;
+  const change = carryTrend.length > 1 && average !== undefined ? average - carryTrend[0] : undefined;
   const sortedRounds = rounds.slice().sort((a, b) => a.date.localeCompare(b.date));
   const issueNotes = (source: AppData["rounds"]) => source.flatMap((round) => round.holes.flatMap((hole) => (hole.shots || [])
     .filter((shot) => shot.club === club && (shot.outcome === "bad" || (shot.outcomes || []).some((outcome) => outcome.outcome === "bad")))
@@ -2263,6 +2266,47 @@ function formatScoreToPar(value: number) {
   return value === 0 ? "E" : `${value > 0 ? "+" : ""}${value}`;
 }
 
+function roundAccuracyStats(rounds: AppData["rounds"]) {
+  let fairways = 0;
+  let firHoles = 0;
+  let greens = 0;
+  let girHoles = 0;
+  let threePutts = 0;
+  let puttingHoles = 0;
+  rounds.forEach((round) => round.holes.filter((hole) => hole.score > 0).forEach((hole) => {
+    const par = holePar(hole.holeNumber, round.courseId);
+    const tee = (hole.shots || []).find((shot) => shot.phase === "tee");
+    // FIR is only par 4/5, and only holes with a recorded tee outcome count.
+    if (par !== 3 && tee?.outcomes?.length) {
+      firHoles += 1;
+      if (tee.outcomes.some((outcome) => outcome.outcome === "good" && outcome.note === "Fairway found")) fairways += 1;
+    }
+    const approachShots = (hole.shots || []).filter((shot) => ["tee", "approach", "short-game"].includes(shot.phase));
+    const hasGreenData = Boolean(hole.onGreen || approachShots.some((shot) => shot.outcome || shot.outcomes?.length));
+    // GIR includes par 3s, but only holes with recorded approach/green data count.
+    if (hasGreenData) {
+      girHoles += 1;
+      if (approachShots.slice(0, Math.max(0, par - 2)).some((shot) =>
+        (shot.phase === "approach" || shot.phase === "short-game" || shot.phase === "tee") &&
+        shot.outcomes?.some((outcome) => outcome.outcome === "good" && (outcome.note === "Hit green" || outcome.note === "Good chip on")),
+      )) greens += 1;
+    }
+    const putts = (hole.shots || []).filter((shot) => shot.phase === "putting");
+    if (putts.some((shot) => shot.outcome || shot.outcomes?.length)) {
+      puttingHoles += 1;
+      if (putts.length >= 3 || putts.some((shot) => shot.outcomes?.some((outcome) => outcome.note === "Three-putt"))) threePutts += 1;
+    }
+  }));
+  return {
+    fir: firHoles ? Math.round((fairways / firHoles) * 100) : null,
+    gir: girHoles ? Math.round((greens / girHoles) * 100) : null,
+    firHoles,
+    girHoles,
+    threePutts: puttingHoles ? Math.round((threePutts / puttingHoles) * 100) : null,
+    puttingHoles,
+  };
+}
+
 function Progress({
   data,
   recommendation: rec,
@@ -2313,9 +2357,9 @@ function Progress({
     const readings = data.readings.filter((reading) => reading.club === club);
     const usable = readings.filter((reading) => !reading.severeMiss);
     const distances = usable.map((reading) => reading.distanceMetres);
-    const average = distances.length
-      ? distances.reduce((sum, value) => sum + value, 0) / distances.length
-      : 0;
+    // Keep Insights aligned with the Distances panel and the caddie: the
+    // canonical value is the recent weighted median, not an all-time mean.
+    const average = clubSummary(data.readings, club).typical || 0;
     const dispersion = distances.length
       ? Math.max(...distances) - Math.min(...distances)
       : 0;
@@ -2354,6 +2398,7 @@ function Progress({
   const latestScore = latestRound ? latestRound.totalScore || roundTotal(latestRound) : undefined;
   const latestHoles = latestRound ? latestRound.holes.filter((hole) => hole.score > 0).length || latestRound.holes.length : 0;
   const latestPar = latestRound ? latestRound.holes.reduce((sum, hole) => sum + holePar(hole.holeNumber, latestRound.courseId), 0) : 0;
+  const latestAccuracy = archived.length ? roundAccuracyStats(archived) : null;
   const previous = scores.length > 1 ? scores.at(-2) : undefined;
   const previousRound = recent.length > 1 ? recent.at(-2) : undefined;
   const comparableScore = (score: number, round: AppData["rounds"][number], otherRound: AppData["rounds"][number]) => {
@@ -2416,6 +2461,20 @@ function Progress({
           <span className="eyebrow">CHANGE</span>
           <strong>{scoreDelta === undefined ? "—" : `${scoreDelta > 0 ? "+" : ""}${Math.round(scoreDelta)}`}</strong>
           <span>{scoreDelta === undefined ? "First round" : "vs previous round"}</span>
+        </div>
+      </section>
+      <section className="metric-grid round-accuracy-grid" aria-label="Latest round accuracy">
+        <div className="metric">
+          <span>FIR</span>
+          <strong>{latestAccuracy?.fir == null ? "—" : `${latestAccuracy.fir}%`}</strong>
+        </div>
+        <div className="metric">
+          <span>GIR</span>
+          <strong>{latestAccuracy?.gir == null ? "—" : `${latestAccuracy.gir}%`}</strong>
+        </div>
+        <div className="metric">
+          <span>3-putt rate</span>
+          <strong>{latestAccuracy?.threePutts == null ? "—" : `${latestAccuracy.threePutts}%`}</strong>
         </div>
       </section>
       <section className="panel handicap-panel">
