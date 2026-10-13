@@ -17,6 +17,7 @@ import {
   median,
   recommendation,
   roundTotal,
+  puttingStats,
   seedData,
   roundHandicapIndex,
   getOnCourseClubAdjustment,
@@ -31,6 +32,7 @@ import {
   getContextEvidence,
   shotLearningInsights,
   enrichShotWithContext,
+  onCourseDistanceReadings,
 } from "./domain";
 
 describe("local calendar dates", () => {
@@ -523,5 +525,42 @@ describe("round feedback", () => {
     expect(recommendation(rounds).text).toContain(
       "Not enough repeated feedback",
     );
+  });
+});
+
+describe("putting stats", () => {
+  it("normalizes recorded putts to 18 holes and expands legacy three-putt labels", () => {
+    const round = {
+      id: "putts", date: "2026-09-20", courseName: "Test", overallNote: "", status: "archived" as const,
+      holes: Array.from({ length: 9 }, (_, index) => ({
+        holeNumber: index + 1, score: 4, focusCategory: "Putting" as const, wentRight: "", wentWrong: "",
+        shots: index === 0
+          ? [{ id: `${index}-0`, phase: "putting" as const, note: "Three-putt" }]
+          : [{ id: `${index}-0`, phase: "putting" as const, note: "2 putt" }],
+      })),
+    };
+    expect(puttingStats([round])).toMatchObject({ totalPutts: 19, holesTracked: 9, per18: 38 });
+  });
+
+  it("ignores blank putting placeholders", () => {
+    const round = {
+      id: "blank", date: "2026-09-20", courseName: "Test", overallNote: "", status: "archived" as const,
+      holes: [{ holeNumber: 1, score: 4, focusCategory: "Putting" as const, wentRight: "", wentWrong: "", shots: [{ id: "blank-shot", phase: "putting" as const }] }],
+    };
+    expect(puttingStats([round]).per18).toBeNull();
+  });
+});
+
+describe("on-course distance filtering", () => {
+  it("keeps measured shots within the club baseline buffer", () => {
+    const round = {
+      id: "gps", date: "2026-09-20", courseName: "Test", overallNote: "", status: "archived" as const,
+      holes: [{ holeNumber: 1, score: 4, focusCategory: "Approach" as const, wentRight: "", wentWrong: "", shots: [
+        { id: "good", phase: "approach" as const, club: "7i", actualDistanceM: 145 },
+        { id: "bad", phase: "approach" as const, club: "7i", actualDistanceM: 190 },
+      ] }],
+    };
+    const baseline = [{ id: "range", club: "7i", distanceMetres: 150, mishit: false, sessionDate: "2026-09-19", createdAt: "2026-09-19" }];
+    expect(onCourseDistanceReadings([round], baseline).map((reading) => reading.distanceMetres)).toEqual([145]);
   });
 });

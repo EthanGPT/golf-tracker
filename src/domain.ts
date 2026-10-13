@@ -273,7 +273,11 @@ export function getOnCourseClubAdjustment(rounds: Round[], club: ClubName, basel
   const evidence: Array<{ kind: "actual" | "short" | "long" | "good"; value: number }> = [];
   for (const round of rounds) for (const hole of round.holes) for (const shot of hole.shots || []) {
     if (shot.club !== club) continue;
-    if (shot.actualDistanceM !== undefined && shot.actualDistanceM >= 5 && shot.startDistanceToTargetM === undefined && shot.endDistanceToTargetM === undefined) {
+    // GPS travel from short-game shots is useful to display, but it is not
+    // evidence of a full club distance. Only tee/approach shots can calibrate
+    // the caddie's club-distance model, and only near the known carry baseline.
+    const nearBaseline = baselineCarryM === undefined || Math.abs(shot.actualDistanceM! - baselineCarryM) <= 25;
+    if (["tee", "approach"].includes(shot.phase) && shot.actualDistanceM !== undefined && shot.actualDistanceM >= 5 && nearBaseline && shot.startDistanceToTargetM === undefined && shot.endDistanceToTargetM === undefined) {
       evidence.push({ kind: "actual", value: shot.actualDistanceM });
       continue;
     }
@@ -1151,7 +1155,10 @@ export function adaptiveCaddieDecision(
       const summary = clubSummary(readings, club);
       const carry = summary.typical;
       const suitability = lieSuitability(club, lie);
-      const onCourse = getOnCourseClubAdjustment(rounds, club, carry);
+      // Keep GPS on-course distances observational for now. They are shown in
+      // the tracker, but must not influence caddie club selection until there
+      // is enough clean, full-shot evidence.
+      const onCourse = { adjustmentM: 0 };
       const learned = getContextEvidence(rounds, {
         phase: lie === "tee" ? "tee" : "approach",
         club,
@@ -1194,8 +1201,6 @@ export function adaptiveCaddieDecision(
   if (best.playableRate !== undefined) reasons.push({ key: "adaptive-playable", label: "Playable", value: `${Math.round(best.playableRate * 100)}% playable`, tone: "positive" });
   if (best.severeMissRate !== undefined) reasons.push({ key: "adaptive-severe", label: "Severe miss", value: `${Math.round(best.severeMissRate * 100)}% severe miss`, tone: best.severeMissRate > 0.15 ? "warning" : "neutral" });
   reasons.push({ key: "adaptive-fit", label: "Reason", value: best.carryM && best.carryM >= effectiveDistanceM ? "Shortest reliable club that reaches" : "Best available distance/risk balance", tone: "positive" });
-  const adjustment = getOnCourseClubAdjustment(rounds, best.club, best.carryM);
-  if (adjustment.adjustmentM) reasons.push({ key: "on-course-adjustment", label: "Recent rounds", value: adjustment.reason, tone: "neutral" });
   return { recommendedClub: best.club, targetDistanceM, effectiveDistanceM, lie, candidates, reasons, status: "recommended" };
 }
 
@@ -1270,6 +1275,58 @@ export function seedData(): AppData {
 
 export function roundTotal(round: Round) {
   return round.holes.reduce((total, hole) => total + (hole.score || 0), 0);
+}
+
+/** Reliable GPS-measured total-travel distances for non-putting shots. */
+export function onCourseDistanceReadings(rounds: Round[], baselineReadings: RangeReading[] = [], toleranceM = 25): RangeReading[] {
+  return rounds
+    .filter((round) => round.status === "archived")
+    .flatMap((round) => round.holes.flatMap((hole) => (hole.shots || [])
+      .filter((shot) => {
+        if (shot.phase === "putting" || !shot.club || shot.club === "Putter" || shot.actualDistanceM === undefined || shot.actualDistanceM < 5) return false;
+        const baseline = clubSummary(baselineReadings, shot.club).typical;
+        return baseline === undefined || Math.abs(shot.actualDistanceM - baseline) <= toleranceM;
+      })
+      .map((shot) => ({
+        id: `on-course-${round.id}-${hole.holeNumber}-${shot.id}`,
+        club: shot.club!,
+        distanceMetres: Math.round(shot.actualDistanceM!),
+        mishit: false,
+        sessionDate: round.date,
+        createdAt: round.archivedAt || round.date,
+      }))));
+}
+
+/** Putting averages based only on holes where putting shots were recorded. */
+export function puttingStats(rounds: Round[]) {
+  const puttsForShot = (shot: HoleShot) => {
+    const notes = [shot.note, ...(shot.outcomes || []).map((outcome) => outcome.note)]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    if (/three[- ]?putt/.test(notes)) return 3;
+    const count = notes.match(/([123])\s*putt/);
+    return count ? Number(count[1]) : 1;
+  };
+  const trackedRounds = rounds.map((round) => {
+    const holes = round.holes
+      .map((hole) => ({
+        hole,
+        putts: (hole.shots || [])
+          .filter((shot) => shot.phase === "putting" && (shot.outcome || shot.note || shot.outcomes?.length))
+          .reduce((total, shot) => total + puttsForShot(shot), 0),
+      }))
+      .filter((item) => item.putts > 0);
+    return { holes, totalPutts: holes.reduce((sum, item) => sum + item.putts, 0) };
+  }).filter((round) => round.holes.length > 0);
+  const holesTracked = trackedRounds.reduce((sum, round) => sum + round.holes.length, 0);
+  const totalPutts = trackedRounds.reduce((sum, round) => sum + round.totalPutts, 0);
+  return {
+    totalPutts,
+    roundsTracked: trackedRounds.length,
+    holesTracked,
+    per18: holesTracked ? (totalPutts / holesTracked) * 18 : null,
+  };
 }
 
 export function categoryCounts(rounds: Round[]) {

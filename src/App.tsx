@@ -29,6 +29,8 @@ import {
   localDateString,
   personalisedRecommendation,
   roundTotal,
+  puttingStats,
+  onCourseDistanceReadings,
   roundHandicapIndex,
   currentHandicapIndex,
   roundTroubleDetailsByCategory,
@@ -362,6 +364,7 @@ function App() {
     if (localStorage.getItem(`golf-tracker-handicap-prompt-${latestRound.id}`)) return;
     setHandicapPromptRoundId(latestRound.id);
   }, [latestRound?.id, latestRound?.date]);
+  const onCourseReadings = onCourseDistanceReadings(data?.rounds || [], data?.readings || []);
   const rec = personalisedRecommendation(
     data?.rounds || [],
     data?.readings || [],
@@ -722,6 +725,7 @@ function App() {
         {screen === "distances" && (
           <Distances
             readings={data.readings}
+            onCourseReadings={onCourseReadings}
             bag={data.bag}
             units="metres"
             setUnits={() => undefined}
@@ -1572,11 +1576,13 @@ function Range({
 
 function Distances({
   readings,
+  onCourseReadings,
   bag,
   units,
   setUnits,
 }: {
   readings: AppData["readings"];
+  onCourseReadings: AppData["readings"];
   bag?: ClubName[];
   units: "metres" | "yards";
   setUnits: (units: "metres" | "yards") => void;
@@ -1666,6 +1672,27 @@ function Distances({
           );
         })}
       </div>
+      <section className="panel on-course-distance-panel">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">GPS MEASURED · FILTERED</span>
+            <h3>On-course total distance</h3>
+          </div>
+          <span className="count-pill">{onCourseReadings.length} shots</span>
+        </div>
+        {onCourseReadings.length ? (
+          <div className="on-course-distance-list">
+            {Object.entries(onCourseReadings.reduce<Record<string, number[]>>((groups, reading) => {
+              (groups[reading.club] ||= []).push(reading.distanceMetres);
+              return groups;
+            }, {})).sort(([a], [b]) => a.localeCompare(b)).map(([club, distances]) => {
+              const ordered = distances.slice().sort((a, b) => b - a);
+              const typical = ordered[Math.floor(ordered.length / 2)];
+              return <div className="on-course-distance-row" key={club}><strong>{clubDisplayLabel(club)}</strong><b>{convertMetres(typical, units)} {units === "metres" ? "m" : "yd"}</b><span>{ordered.map((distance) => `${convertMetres(distance, units)}${units === "metres" ? "m" : "yd"}`).join(" · ")}</span></div>;
+            })}
+          </div>
+        ) : <p>Tap Next Shot at your ball during a round to record total ball travel. Measurements more than 25 m from your range baseline are excluded as outliers.</p>}
+      </section>
     </div>
   );
 }
@@ -2398,7 +2425,8 @@ function Progress({
   const latestScore = latestRound ? latestRound.totalScore || roundTotal(latestRound) : undefined;
   const latestHoles = latestRound ? latestRound.holes.filter((hole) => hole.score > 0).length || latestRound.holes.length : 0;
   const latestPar = latestRound ? latestRound.holes.reduce((sum, hole) => sum + holePar(hole.holeNumber, latestRound.courseId), 0) : 0;
-  const latestAccuracy = archived.length ? roundAccuracyStats(archived) : null;
+  const latestAccuracy = latestRound ? roundAccuracyStats([latestRound]) : null;
+  const putting = latestRound ? puttingStats([latestRound]) : puttingStats([]);
   const previous = scores.length > 1 ? scores.at(-2) : undefined;
   const previousRound = recent.length > 1 ? recent.at(-2) : undefined;
   const comparableScore = (score: number, round: AppData["rounds"][number], otherRound: AppData["rounds"][number]) => {
@@ -2463,7 +2491,8 @@ function Progress({
           <span>{scoreDelta === undefined ? "First round" : "vs previous round"}</span>
         </div>
       </section>
-      <section className="metric-grid round-accuracy-grid" aria-label="Latest round accuracy">
+      {insightsTab === "overview" && <>
+      <section className="metric-grid round-accuracy-grid" aria-label="Round accuracy">
         <div className="metric">
           <span>FIR</span>
           <strong>{latestAccuracy?.fir == null ? "—" : `${latestAccuracy.fir}%`}</strong>
@@ -2477,6 +2506,22 @@ function Progress({
           <strong>{latestAccuracy?.threePutts == null ? "—" : `${latestAccuracy.threePutts}%`}</strong>
         </div>
       </section>
+      <section className="panel putting-summary-panel">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">PUTTING</span>
+            <h3>Putts at a glance</h3>
+          </div>
+          <span className="count-pill">{putting.roundsTracked ? `${putting.roundsTracked} round${putting.roundsTracked === 1 ? "" : "s"}` : "No data"}</span>
+        </div>
+        <div className="putting-summary-value">
+          <span>Putts / 18</span>
+          <strong>{putting.per18 == null ? "—" : putting.per18.toFixed(1)}</strong>
+          <small>Normalized from explicitly recorded putting holes</small>
+        </div>
+        <small className="metric-note">{putting.holesTracked} hole{putting.holesTracked === 1 ? "" : "s"} tracked</small>
+      </section>
+      </>}
       <section className="panel handicap-panel">
         <div className="section-heading">
           <div>
