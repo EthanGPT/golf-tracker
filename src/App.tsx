@@ -2303,21 +2303,18 @@ function roundAccuracyStats(rounds: AppData["rounds"]) {
   rounds.forEach((round) => round.holes.filter((hole) => hole.score > 0).forEach((hole) => {
     const par = holePar(hole.holeNumber, round.courseId);
     const tee = (hole.shots || []).find((shot) => shot.phase === "tee");
-    // FIR is only par 4/5, and only holes with a recorded tee outcome count.
-    if (par !== 3 && tee?.outcomes?.length) {
+    const outcomesFor = (shot: HoleShot) => shot.outcomes || (shot.note ? [{ outcome: shot.outcome || "bad", note: shot.note }] : []);
+    // FIR is measured over every played par-4/par-5 hole.
+    if (par === 4 || par === 5) {
       firHoles += 1;
-      if (tee.outcomes.some((outcome) => outcome.outcome === "good" && outcome.note === "Fairway found")) fairways += 1;
+      if (tee && outcomesFor(tee).some((outcome) => outcome.outcome === "good" && outcome.note === "Fairway found")) fairways += 1;
     }
-    const approachShots = (hole.shots || []).filter((shot) => ["tee", "approach", "short-game"].includes(shot.phase));
-    const hasGreenData = Boolean(hole.onGreen || approachShots.some((shot) => shot.outcome || shot.outcomes?.length));
-    // GIR includes par 3s, but only holes with recorded approach/green data count.
-    if (hasGreenData) {
-      girHoles += 1;
-      if (approachShots.slice(0, Math.max(0, par - 2)).some((shot) =>
-        (shot.phase === "approach" || shot.phase === "short-game" || shot.phase === "tee") &&
-        shot.outcomes?.some((outcome) => outcome.outcome === "good" && (outcome.note === "Hit green" || outcome.note === "Good chip on")),
-      )) greens += 1;
-    }
+    const scoringShots = (hole.shots || []).filter((shot) => shot.phase !== "putting");
+    // GIR is measured over every played hole: green in par - 2 strokes.
+    girHoles += 1;
+    if (scoringShots.slice(0, Math.max(0, par - 2)).some((shot) =>
+      outcomesFor(shot).some((outcome) => outcome.outcome === "good" && (outcome.note === "Hit green" || outcome.note === "Good chip on")),
+    )) greens += 1;
     const putts = (hole.shots || []).filter((shot) => shot.phase === "putting");
     if (putts.some((shot) => shot.outcome || shot.outcomes?.length)) {
       puttingHoles += 1;
