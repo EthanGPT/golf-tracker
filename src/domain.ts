@@ -1305,8 +1305,10 @@ export function puttingStats(rounds: Round[]) {
       .join(" ")
       .toLowerCase();
     if (/three[- ]?putt/.test(notes)) return 3;
-    const count = notes.match(/([123])\s*putt/);
-    return count ? Number(count[1]) : 1;
+    // A putting entry represents the selected result for that hole. Other
+    // notes such as "Good speed" must not turn a 2-putt into another putt.
+    const counts = [...notes.matchAll(/([123])\s*[- ]?putt/g)].map((match) => Number(match[1]));
+    return counts.length ? Math.max(...counts) : 1;
   };
   const trackedRounds = rounds.map((round) => {
     const holes = round.holes
@@ -1325,6 +1327,7 @@ export function puttingStats(rounds: Round[]) {
     totalPutts,
     roundsTracked: trackedRounds.length,
     holesTracked,
+    averagePerRound: trackedRounds.length ? totalPutts / trackedRounds.length : null,
     per18: holesTracked ? (totalPutts / holesTracked) * 18 : null,
   };
 }

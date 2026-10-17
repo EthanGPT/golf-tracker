@@ -117,6 +117,22 @@ const emptyHole = (holeNumber: number): RoundHole => ({
   wentRight: "",
   wentWrong: "",
 });
+
+function scoreForShots(shots: HoleShot[]) {
+  const recorded = shots.filter((shot) => shot.phase !== "putting"
+    ? Boolean(shot.club)
+    : Boolean(shot.note || shot.outcome || shot.outcomes?.length));
+  const strokes = recorded.reduce((total, shot) => {
+    if (shot.phase !== "putting") return total + 1;
+    const notes = [shot.note, ...(shot.outcomes || []).map((outcome) => outcome.note)]
+      .filter(Boolean).join(" ").toLowerCase();
+    if (/three[- ]?putt/.test(notes)) return total + 3;
+    const puttCount = notes.match(/([123])\s*putt/);
+    return total + (puttCount ? Number(puttCount[1]) : 1);
+  }, 0);
+  return strokes || undefined;
+}
+
 function App() {
   const [data, setData] = useState<AppData | null>(() => loadLocalData());
   const [session, setSession] = useState<Session | null>(null);
@@ -2304,17 +2320,25 @@ function roundAccuracyStats(rounds: AppData["rounds"]) {
     const par = holePar(hole.holeNumber, round.courseId);
     const tee = (hole.shots || []).find((shot) => shot.phase === "tee");
     const outcomesFor = (shot: HoleShot) => shot.outcomes || (shot.note ? [{ outcome: shot.outcome || "bad", note: shot.note }] : []);
-    // FIR is measured over every played par-4/par-5 hole.
+    // Normalize explicitly found fairways to an 18-hole round.
     if (par === 4 || par === 5) {
-      firHoles += 1;
-      if (tee && outcomesFor(tee).some((outcome) => outcome.outcome === "good" && outcome.note === "Fairway found")) fairways += 1;
+      const teeOutcomes = tee ? outcomesFor(tee) : [];
+      if (teeOutcomes.length) {
+        if (teeOutcomes.some((outcome) => outcome.outcome === "good" && outcome.note === "Fairway found")) fairways += 1;
+      }
     }
     const scoringShots = (hole.shots || []).filter((shot) => shot.phase !== "putting");
-    // GIR is measured over every played hole: green in par - 2 strokes.
-    girHoles += 1;
-    if (scoringShots.slice(0, Math.max(0, par - 2)).some((shot) =>
-      outcomesFor(shot).some((outcome) => outcome.outcome === "good" && (outcome.note === "Hit green" || outcome.note === "Good chip on")),
-    )) greens += 1;
+    // GIR requires an explicit green result on a stroke that could reach the
+    // green in regulation. A chip-on is a short-game result, not GIR.
+    const girShots = scoringShots.slice(0, Math.max(0, par - 2));
+    const hasGirEvidence = girShots.some((shot) =>
+      outcomesFor(shot).some((outcome) => outcome.outcome === "good" &&
+        (outcome.note === "Hit green" || outcome.note === "Good chip on")),
+    );
+    if (hasGirEvidence || scoringShots.length) {
+      girHoles += 1;
+      if (hasGirEvidence) greens += 1;
+    }
     const putts = (hole.shots || []).filter((shot) => shot.phase === "putting");
     if (putts.some((shot) => shot.outcome || shot.outcomes?.length)) {
       puttingHoles += 1;
@@ -2322,7 +2346,7 @@ function roundAccuracyStats(rounds: AppData["rounds"]) {
     }
   }));
   return {
-    fir: firHoles ? Math.round((fairways / firHoles) * 100) : null,
+    fir: fairways || firHoles ? Math.round((fairways / 18) * 100) : null,
     gir: girHoles ? Math.round((greens / girHoles) * 100) : null,
     firHoles,
     girHoles,
@@ -2512,11 +2536,9 @@ function Progress({
           <span className="count-pill">{putting.roundsTracked ? `${putting.roundsTracked} round${putting.roundsTracked === 1 ? "" : "s"}` : "No data"}</span>
         </div>
         <div className="putting-summary-value">
-          <span>Putts / 18</span>
+          <span>Putts / 18 holes</span>
           <strong>{putting.per18 == null ? "—" : putting.per18.toFixed(1)}</strong>
-          <small>Normalized from explicitly recorded putting holes</small>
         </div>
-        <small className="metric-note">{putting.holesTracked} hole{putting.holesTracked === 1 ? "" : "s"} tracked</small>
       </section>
       </>}
       <section className="panel handicap-panel">
@@ -2597,7 +2619,7 @@ function Progress({
           })}
         </div>
       </section>
-      {learningInsights.length > 0 && (
+      {insightsTab === "overview" && learningInsights.length > 0 && (
         <section className="panel round-learning-panel">
           <div className="section-heading">
             <div>
@@ -3430,10 +3452,10 @@ function RoundMode({
           shots={currentHole.shots || []}
           setShots={(shots) => updateHole({
             shots,
+            ...(scoreForShots(shots) ? { score: scoreForShots(shots)! } : {}),
             onGreen: shots.some((shot) =>
               (shot.phase === "tee" && shot.outcomes?.some((outcome) => outcome.outcome === "good" && outcome.note === "Hit green")) ||
-              (shot.phase === "approach" && shot.outcomes?.some((outcome) => outcome.outcome === "good" && outcome.note === "Hit green")) ||
-              (shot.phase === "short-game" && shot.outcomes?.some((outcome) => outcome.outcome === "good" && outcome.note === "Good chip on")),
+              (shot.phase === "approach" && shot.outcomes?.some((outcome) => outcome.outcome === "good" && outcome.note === "Hit green")),
             ),
           })}
           teeDefault={teeDecision?.club}
@@ -3457,7 +3479,7 @@ function RoundMode({
         }}
       >
         <Save size={18} />
-        {completed >= length - 1 ? "Finish round" : "Save hole →"}
+        {index >= holes.length - 1 ? "Finish round" : "Save hole →"}
       </button>
       {notice && (
         <p className="notice">
