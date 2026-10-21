@@ -2324,6 +2324,7 @@ function roundAccuracyStats(rounds: AppData["rounds"]) {
     if (par === 4 || par === 5) {
       const teeOutcomes = tee ? outcomesFor(tee) : [];
       if (teeOutcomes.length) {
+        firHoles += 1;
         if (teeOutcomes.some((outcome) => outcome.outcome === "good" && outcome.note === "Fairway found")) fairways += 1;
       }
     }
@@ -2446,8 +2447,11 @@ function Progress({
   const latestScore = latestRound ? latestRound.totalScore || roundTotal(latestRound) : undefined;
   const latestHoles = latestRound ? latestRound.holes.filter((hole) => hole.score > 0).length || latestRound.holes.length : 0;
   const latestPar = latestRound ? latestRound.holes.reduce((sum, hole) => sum + holePar(hole.holeNumber, latestRound.courseId), 0) : 0;
-  const latestAccuracy = latestRound ? roundAccuracyStats([latestRound]) : null;
-  const putting = latestRound ? puttingStats([latestRound]) : puttingStats([]);
+  // Accuracy cards describe the player's recorded rounds as a whole. The
+  // hero remains a latest-round view, but FIR/GIR/3-putt must not reset after
+  // every new round.
+  const allRoundAccuracy = archived.length ? roundAccuracyStats(archived) : null;
+  const putting = archived.length ? puttingStats(archived) : puttingStats([]);
   const previous = scores.length > 1 ? scores.at(-2) : undefined;
   const previousRound = recent.length > 1 ? recent.at(-2) : undefined;
   const comparableScore = (score: number, round: AppData["rounds"][number], otherRound: AppData["rounds"][number]) => {
@@ -2516,15 +2520,15 @@ function Progress({
       <section className="metric-grid round-accuracy-grid" aria-label="Round accuracy">
         <div className="metric">
           <span>FIR</span>
-          <strong>{latestAccuracy?.fir == null ? "—" : `${latestAccuracy.fir}%`}</strong>
+          <strong>{allRoundAccuracy?.fir == null ? "—" : `${allRoundAccuracy.fir}%`}</strong>
         </div>
         <div className="metric">
           <span>GIR</span>
-          <strong>{latestAccuracy?.gir == null ? "—" : `${latestAccuracy.gir}%`}</strong>
+          <strong>{allRoundAccuracy?.gir == null ? "—" : `${allRoundAccuracy.gir}%`}</strong>
         </div>
         <div className="metric">
           <span>3-putt rate</span>
-          <strong>{latestAccuracy?.threePutts == null ? "—" : `${latestAccuracy.threePutts}%`}</strong>
+          <strong>{allRoundAccuracy?.threePutts == null ? "—" : `${allRoundAccuracy.threePutts}%`}</strong>
         </div>
       </section>
       <section className="panel putting-summary-panel">
@@ -3145,9 +3149,13 @@ function RoundMode({
     draft.holes.find((hole) => hole.holeNumber === holeNumber) ||
     emptyHole(holeNumber);
   const courseId = draft.courseId || "hermanus-golf-club";
-  const completed = draft.holes.filter((hole) => hole.score > 0).length;
-  const scoreToPar = draft.holes
-    .filter((hole) => hole.score > 0)
+  // The active hole is a live draft: its stepper and shot tags can change
+  // before Save hole. Keep the running round figures pinned to saved holes so
+  // an in-progress score can never distort the total.
+  const savedHoles = draft.holes.filter((hole) => hole.score > 0 && holes.indexOf(hole.holeNumber) < index);
+  const completed = savedHoles.length;
+  const totalScore = savedHoles.reduce((total, hole) => total + hole.score, 0);
+  const scoreToPar = savedHoles
     .reduce((total, hole) => total + hole.score - holePar(hole.holeNumber, courseId), 0);
   const selectedHolePar = holePar(holeNumber, courseId);
   const importedTeeOrigin = getHoleTeeOrigin(courseId, holeNumber, draft.tee || "white");
@@ -3269,7 +3277,10 @@ function RoundMode({
         <strong>Hole {holeNumber}</strong>
         <span>Par {selectedHolePar}</span>
         <span>{holePlayingDistance}m</span>
-        {completed > 0 && <span className={`round-score-to-par ${scoreToPar < 0 ? "under" : scoreToPar > 0 ? "over" : "even"}`}>{scoreToPar === 0 ? "E" : scoreToPar > 0 ? `+${scoreToPar}` : scoreToPar}</span>}
+        {completed > 0 && <>
+          <span className="round-running-score">Score {totalScore}</span>
+          <span className={`round-score-to-par ${scoreToPar < 0 ? "under" : scoreToPar > 0 ? "over" : "even"}`}>to par {scoreToPar === 0 ? "E" : scoreToPar > 0 ? `+${scoreToPar}` : scoreToPar}</span>
+        </>}
         <small>
           {completed}/{length}
         </small>
