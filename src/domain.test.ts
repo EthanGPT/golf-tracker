@@ -18,6 +18,7 @@ import {
   recommendation,
   roundTotal,
   puttingStats,
+  puttCountFromShot,
   seedData,
   roundHandicapIndex,
   getOnCourseClubAdjustment,
@@ -529,6 +530,11 @@ describe("round feedback", () => {
 });
 
 describe("putting stats", () => {
+  it("does not treat qualitative putting notes as a one-putt", () => {
+    expect(puttCountFromShot({ id: "read", phase: "putting", note: "Good read" })).toBeNull();
+    expect(puttCountFromShot({ id: "speed", phase: "putting", outcomes: [{ outcome: "good", note: "Good speed" }] })).toBeNull();
+  });
+
   it("normalizes recorded putts to 18 holes and expands legacy three-putt labels", () => {
     const round = {
       id: "putts", date: "2026-09-20", courseName: "Test", overallNote: "", status: "archived" as const,
@@ -539,7 +545,17 @@ describe("putting stats", () => {
           : [{ id: `${index}-0`, phase: "putting" as const, note: "2 putt" }],
       })),
     };
-    expect(puttingStats([round])).toMatchObject({ totalPutts: 19, holesTracked: 9, per18: 38 });
+    expect(puttingStats([round])).toMatchObject({
+      totalPutts: 19,
+      holesTracked: 9,
+      per18: 38,
+      onePuttHoles: 0,
+      twoPuttHoles: 8,
+      threePlusPuttHoles: 1,
+      onePuttRate: 0,
+      twoPuttRate: 89,
+      threePlusPuttRate: 11,
+    });
   });
 
   it("ignores blank putting placeholders", () => {

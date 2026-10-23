@@ -348,6 +348,10 @@ h3 {
   grid-template-columns: repeat(3, 1fr);
   gap: 9px;
 }
+.putting-breakdown-grid,
+.scoring-mix-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
 .metric {
   background: var(--deep);
   color: white;
@@ -372,6 +376,12 @@ h3 {
   display: block;
   color: var(--muted, #7d827b);
   margin-top: 0.45rem;
+}
+.panel-footnote {
+  display: block;
+  color: var(--muted, #7d827b);
+  margin-top: 10px;
+  font-size: 11px;
 }
 
 .on-course-distance-list { display: grid; gap: 8px; }
@@ -1257,6 +1267,10 @@ select:focus {
   }
   .metric-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .putting-breakdown-grid,
+  .scoring-mix-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .form-row {
     grid-template-columns: minmax(0, 1fr) auto;

@@ -1299,37 +1299,51 @@ export function onCourseDistanceReadings(rounds: Round[], baselineReadings: Rang
 
 /** Putting averages based only on holes where putting shots were recorded. */
 export function puttingStats(rounds: Round[]) {
-  const puttsForShot = (shot: HoleShot) => {
-    const notes = [shot.note, ...(shot.outcomes || []).map((outcome) => outcome.note)]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
-    if (/three[- ]?putt/.test(notes)) return 3;
-    // A putting entry represents the selected result for that hole. Other
-    // notes such as "Good speed" must not turn a 2-putt into another putt.
-    const counts = [...notes.matchAll(/([123])\s*[- ]?putt/g)].map((match) => Number(match[1]));
-    return counts.length ? Math.max(...counts) : 1;
-  };
+  const puttsForShot = puttCountFromShot;
   const trackedRounds = rounds.map((round) => {
     const holes = round.holes
       .map((hole) => ({
         hole,
         putts: (hole.shots || [])
-          .filter((shot) => shot.phase === "putting" && (shot.outcome || shot.note || shot.outcomes?.length))
-          .reduce((total, shot) => total + puttsForShot(shot), 0),
+          .filter((shot) => shot.phase === "putting")
+          .map(puttsForShot)
+          .filter((putts): putts is number => putts !== null)
+          .reduce((total, putts) => total + putts, 0),
       }))
       .filter((item) => item.putts > 0);
     return { holes, totalPutts: holes.reduce((sum, item) => sum + item.putts, 0) };
   }).filter((round) => round.holes.length > 0);
   const holesTracked = trackedRounds.reduce((sum, round) => sum + round.holes.length, 0);
   const totalPutts = trackedRounds.reduce((sum, round) => sum + round.totalPutts, 0);
+  const onePuttHoles = trackedRounds.reduce((sum, round) => sum + round.holes.filter((item) => item.putts === 1).length, 0);
+  const twoPuttHoles = trackedRounds.reduce((sum, round) => sum + round.holes.filter((item) => item.putts === 2).length, 0);
+  const threePlusPuttHoles = trackedRounds.reduce((sum, round) => sum + round.holes.filter((item) => item.putts >= 3).length, 0);
+  const rate = (count: number) => holesTracked ? Math.round((count / holesTracked) * 100) : null;
   return {
     totalPutts,
     roundsTracked: trackedRounds.length,
     holesTracked,
+    onePuttHoles,
+    twoPuttHoles,
+    threePlusPuttHoles,
+    onePuttRate: rate(onePuttHoles),
+    twoPuttRate: rate(twoPuttHoles),
+    threePlusPuttRate: rate(threePlusPuttHoles),
     averagePerRound: trackedRounds.length ? totalPutts / trackedRounds.length : null,
     per18: holesTracked ? (totalPutts / holesTracked) * 18 : null,
   };
+}
+
+/** Return an explicitly recorded putt count; qualitative notes are not strokes. */
+export function puttCountFromShot(shot: HoleShot): number | null {
+  if (shot.phase !== "putting") return null;
+  const notes = [shot.note, ...(shot.outcomes || []).map((outcome) => outcome.note)]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  if (/three[- ]?putt/.test(notes)) return 3;
+  const counts = [...notes.matchAll(/(\d+)\s*[- ]?putt/g)].map((match) => Number(match[1]));
+  return counts.length ? Math.max(...counts) : null;
 }
 
 export function categoryCounts(rounds: Round[]) {

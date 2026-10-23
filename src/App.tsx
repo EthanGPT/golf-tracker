@@ -30,12 +30,12 @@ import {
   personalisedRecommendation,
   roundTotal,
   puttingStats,
+  puttCountFromShot,
   onCourseDistanceReadings,
   roundHandicapIndex,
   currentHandicapIndex,
   roundTroubleDetailsByCategory,
   roundTroubleByCategory,
-  shotLearningInsights,
   enrichShotWithContext,
   recentCategoryTroubleStats,
   ensurePuttingShot,
@@ -89,6 +89,7 @@ import {
   holePar,
   loopLabel,
 } from "./course";
+import { fairwayAccuracyStats, greenInRegulationStats, scoringDistributionStats } from "./roundAccuracy";
 import {
   fetchAndCacheCourseGeometry,
   GOLFTRAXX_HERMANUS_PROVIDER_VERSION,
@@ -174,6 +175,7 @@ function App() {
   const [roundWeather, setRoundWeather] = useState<WeatherContext>();
   const [completedRoundId, setCompletedRoundId] = useState<string | null>(null);
   const [handicapPromptRoundId, setHandicapPromptRoundId] = useState<string | null>(null);
+  const [settingsEditor, setSettingsEditor] = useState<"course" | "tee" | "handicap" | null>(null);
   const [, setGeometryVersion] = useState(0);
   useEffect(() => {
     localStorage.setItem("golf-tracker-screen", screen);
@@ -771,7 +773,13 @@ function App() {
           <Progress data={data} recommendation={rec} updatePlan={updatePlan} focusRoundId={completedRoundId} latestHandicap={currentHandicap} updateRound={(round) => updateData((current) => ({ ...current, rounds: current.rounds.map((item) => item.id === round.id ? round : item), handicapHistory: round.handicapIndex != null && current.handicapHistory.at(-1)?.index !== round.handicapIndex ? [...current.handicapHistory, { id: crypto.randomUUID(), date: localDateString(), index: round.handicapIndex }] : current.handicapHistory }))} />
         )}
       {screen === "settings" && (
-          <Settings data={data} updateData={updateData} signOut={() => { guestModeRef.current = false; setGuestMode(false); setCloudError(""); setSession(null); setData(null); setDataReady(false); setShowOnboarding(false); void supabase?.auth.signOut(); }} />
+          <Settings
+            data={data}
+            updateData={updateData}
+            signOut={() => { guestModeRef.current = false; setGuestMode(false); setCloudError(""); setSession(null); setData(null); setDataReady(false); setShowOnboarding(false); void supabase?.auth.signOut(); }}
+            settingsEditor={settingsEditor}
+            setSettingsEditor={setSettingsEditor}
+          />
         )}
       </main>
       {handicapPromptRoundId && (
@@ -780,7 +788,7 @@ function App() {
             <span className="eyebrow">ROUND FOLLOW-UP</span>
             <h3>Update your handicap?</h3>
             <p className="settings-help">You played a round yesterday. If your official index has changed, add the latest number to keep MyCaddy’s recommendations current.</p>
-            <button className="primary-button" onClick={() => { localStorage.setItem(`golf-tracker-handicap-prompt-${handicapPromptRoundId}`, "opened"); setHandicapPromptRoundId(null); setScreen("settings"); }}>Update handicap</button>
+            <button className="primary-button" onClick={() => { localStorage.setItem(`golf-tracker-handicap-prompt-${handicapPromptRoundId}`, "opened"); setHandicapPromptRoundId(null); setSettingsEditor("handicap"); setScreen("settings"); }}>Update handicap</button>
             <button className="text-button" onClick={() => { localStorage.setItem(`golf-tracker-handicap-prompt-${handicapPromptRoundId}`, "dismissed"); setHandicapPromptRoundId(null); }}>Not now</button>
           </div>
         </div>
@@ -1939,17 +1947,18 @@ function Settings({
   data,
   updateData,
   signOut,
+  settingsEditor,
+  setSettingsEditor,
 }: {
   data: AppData;
   updateData: (change: (current: AppData) => AppData) => void;
   signOut: () => void;
+  settingsEditor: "course" | "tee" | "handicap" | null;
+  setSettingsEditor: (editor: "course" | "tee" | "handicap" | null) => void;
 }) {
   const [handicapInput, setHandicapInput] = useState("");
   const [customClub, setCustomClub] = useState("");
   const [editingBag, setEditingBag] = useState(false);
-  const [settingsEditor, setSettingsEditor] = useState<
-    "course" | "tee" | "handicap" | null
-  >(null);
   const bag = data.bag?.length ? data.bag : DEFAULT_BAG;
   const available = [...new Set([...CLUBS, "5W", "Putter", "2i", "3i", "4i"])];
   const bagOrder = ["Dr", "3W", "5W", "4W-Hybrid", "2i", "3i", "4i", "5i", "6i", "7i", "8i", "9i", "PW", "AW", "GW", "SW", "Putter"];
@@ -2310,47 +2319,27 @@ function formatScoreToPar(value: number) {
 }
 
 function roundAccuracyStats(rounds: AppData["rounds"]) {
-  let fairways = 0;
-  let firHoles = 0;
-  let greens = 0;
-  let girHoles = 0;
+  const fairwayStats = fairwayAccuracyStats(rounds, (round, hole) => holePar(hole.holeNumber, round.courseId));
+  const greenStats = greenInRegulationStats(rounds, (round, hole) => holePar(hole.holeNumber, round.courseId));
+  const scoringStats = scoringDistributionStats(rounds, (round, hole) => holePar(hole.holeNumber, round.courseId));
   let threePutts = 0;
   let puttingHoles = 0;
   rounds.forEach((round) => round.holes.filter((hole) => hole.score > 0).forEach((hole) => {
-    const par = holePar(hole.holeNumber, round.courseId);
-    const tee = (hole.shots || []).find((shot) => shot.phase === "tee");
-    const outcomesFor = (shot: HoleShot) => shot.outcomes || (shot.note ? [{ outcome: shot.outcome || "bad", note: shot.note }] : []);
-    // Normalize explicitly found fairways to an 18-hole round.
-    if (par === 4 || par === 5) {
-      const teeOutcomes = tee ? outcomesFor(tee) : [];
-      if (teeOutcomes.length) {
-        firHoles += 1;
-        if (teeOutcomes.some((outcome) => outcome.outcome === "good" && outcome.note === "Fairway found")) fairways += 1;
-      }
-    }
-    const scoringShots = (hole.shots || []).filter((shot) => shot.phase !== "putting");
-    // GIR requires an explicit green result on a stroke that could reach the
-    // green in regulation. A chip-on is a short-game result, not GIR.
-    const girShots = scoringShots.slice(0, Math.max(0, par - 2));
-    const hasGirEvidence = girShots.some((shot) =>
-      outcomesFor(shot).some((outcome) => outcome.outcome === "good" &&
-        (outcome.note === "Hit green" || outcome.note === "Good chip on")),
-    );
-    if (hasGirEvidence || scoringShots.length) {
-      girHoles += 1;
-      if (hasGirEvidence) greens += 1;
-    }
     const putts = (hole.shots || []).filter((shot) => shot.phase === "putting");
-    if (putts.some((shot) => shot.outcome || shot.outcomes?.length)) {
+    const puttCounts = putts.map(puttCountFromShot).filter((count): count is number => count !== null);
+    if (puttCounts.length) {
       puttingHoles += 1;
-      if (putts.length >= 3 || putts.some((shot) => shot.outcomes?.some((outcome) => outcome.note === "Three-putt"))) threePutts += 1;
+      if (puttCounts.reduce((sum, count) => sum + count, 0) >= 3) threePutts += 1;
     }
   }));
   return {
-    fir: fairways || firHoles ? Math.round((fairways / 18) * 100) : null,
-    gir: girHoles ? Math.round((greens / girHoles) * 100) : null,
-    firHoles,
-    girHoles,
+    fir: fairwayStats.fir,
+    gir: greenStats.gir,
+    firFairways: fairwayStats.fairways,
+    firHoles: fairwayStats.attempts,
+    firTrackedHoles: fairwayStats.trackedTeeShots,
+    girHoles: greenStats.attempts,
+    scoringStats,
     threePutts: puttingHoles ? Math.round((threePutts / puttingHoles) * 100) : null,
     puttingHoles,
   };
@@ -2386,7 +2375,6 @@ function Progress({
     .filter((round) => round.status === "archived")
     .sort((a, b) => a.date.localeCompare(b.date));
   const recent = archived.slice(-6);
-  const learningInsights = shotLearningInsights(archived);
   const completed = [
     data.weeklyPlan.practiceAComplete,
     data.weeklyPlan.practiceBComplete,
@@ -2539,9 +2527,39 @@ function Progress({
           </div>
           <span className="count-pill">{putting.roundsTracked ? `${putting.roundsTracked} round${putting.roundsTracked === 1 ? "" : "s"}` : "No data"}</span>
         </div>
-        <div className="putting-summary-value">
-          <span>Putts / 18 holes</span>
-          <strong>{putting.per18 == null ? "—" : putting.per18.toFixed(1)}</strong>
+        <div className="metric-grid putting-breakdown-grid">
+          <div className="metric">
+            <span>Putts / 18</span>
+            <strong>{putting.per18 == null ? "—" : putting.per18.toFixed(1)}</strong>
+          </div>
+          <div className="metric">
+            <span>1-putt holes</span>
+            <strong>{putting.onePuttRate == null ? "—" : `${putting.onePuttRate}%`}</strong>
+          </div>
+          <div className="metric">
+            <span>2-putt holes</span>
+            <strong>{putting.twoPuttRate == null ? "—" : `${putting.twoPuttRate}%`}</strong>
+          </div>
+          <div className="metric">
+            <span>3+ putt holes</span>
+            <strong>{putting.threePlusPuttRate == null ? "—" : `${putting.threePlusPuttRate}%`}</strong>
+          </div>
+        </div>
+        <small className="panel-footnote">Based on {putting.holesTracked || 0} holes with an explicit putt count.</small>
+      </section>
+      <section className="panel scoring-mix-panel">
+        <div className="section-heading">
+          <div>
+            <span className="eyebrow">SCORING MIX</span>
+            <h3>How holes are finishing</h3>
+          </div>
+          <span className="count-pill">{allRoundAccuracy?.scoringStats.holes || 0} holes</span>
+        </div>
+        <div className="metric-grid scoring-mix-grid">
+          <div className="metric"><span>Birdie+</span><strong>{allRoundAccuracy?.scoringStats.birdieOrBetterRate == null ? "—" : `${allRoundAccuracy.scoringStats.birdieOrBetterRate}%`}</strong></div>
+          <div className="metric"><span>Par</span><strong>{allRoundAccuracy?.scoringStats.parRate == null ? "—" : `${allRoundAccuracy.scoringStats.parRate}%`}</strong></div>
+          <div className="metric"><span>Bogey</span><strong>{allRoundAccuracy?.scoringStats.bogeyRate == null ? "—" : `${allRoundAccuracy.scoringStats.bogeyRate}%`}</strong></div>
+          <div className="metric"><span>Double+</span><strong>{allRoundAccuracy?.scoringStats.doubleBogeyOrWorseRate == null ? "—" : `${allRoundAccuracy.scoringStats.doubleBogeyOrWorseRate}%`}</strong></div>
         </div>
       </section>
       </>}
@@ -2623,24 +2641,6 @@ function Progress({
           })}
         </div>
       </section>
-      {insightsTab === "overview" && learningInsights.length > 0 && (
-        <section className="panel round-learning-panel">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">LEARNED FROM YOUR ROUNDS</span>
-              <h3>Patterns worth keeping</h3>
-            </div>
-          </div>
-          <div className="round-learning-list">
-            {learningInsights.map((insight) => (
-              <div key={insight.key}>
-                <strong>{insight.text}</strong>
-                <small>{insight.evidence}</small>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
       <section className="panel insights-form-map">
         <div className="section-heading">
           <div>
