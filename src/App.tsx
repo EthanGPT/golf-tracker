@@ -3749,7 +3749,20 @@ function ShotGroups({
       "short-game": defaultClub && ["PW", "SW"].includes(defaultClub) ? defaultClub : undefined,
       putting: undefined,
     };
-    const additions = Object.entries(desired).filter(([phase, club]) => club && !shots.some((shot) => shot.phase === phase));
+    const additions = Object.entries(desired).filter(([phase, club]) => {
+      if (!club) return false;
+      if (!shots.some((shot) => shot.phase === phase)) return true;
+
+      // A live caddie recommendation represents the next shot. Once the
+      // current shot in that phase has been recorded, add a new entry so a
+      // repeated approach is pre-filled instead of being swallowed by the
+      // first approach entry.
+      const lastShot = shots.at(-1);
+      return phase === "approach" &&
+        lastShot?.phase === "approach" &&
+        lastShot.startDistanceToTargetM !== undefined &&
+        lastShot.endDistanceToTargetM !== undefined;
+    });
     let nextShots = additions.length
       ? [...shots, ...additions.map(([phase, club]) => ({ id: crypto.randomUUID(), phase: phase as ShotPhase, club: club as string }))]
       : shots;

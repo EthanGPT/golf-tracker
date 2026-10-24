@@ -58,6 +58,7 @@ export type AdaptiveClubCandidate = {
   severeMissRate?: number;
   lieSuitability?: number;
   reliabilityScore?: number;
+  contextualScore?: number;
   utility?: number;
   adjustmentM?: number;
   excluded?: boolean;
@@ -1168,7 +1169,10 @@ export function adaptiveCaddieDecision(
       });
       const learnedWeight = learned.reduce((sum, item) => sum + item.weight, 0);
       const learnedPositive = learned.reduce((sum, item) => sum + (item.positive ? item.weight : 0), 0);
-      const learnedNegative = learned.reduce((sum, item) => sum + (item.negative ? item.weight : 0), 0);
+      // Do not blame club selection for an obvious execution error. A fat,
+      // thin, or topped shot should inform practice, not make the caddie
+      // reject an otherwise suitable club.
+      const learnedNegative = learned.reduce((sum, item) => sum + (item.negative && !item.executionIssue ? item.weight : 0), 0);
       const observationCount = learned.length;
       const contextualScore = observationCount >= 2 ? Math.max(-0.18, Math.min(0.18, ((learnedPositive - learnedNegative) / Math.max(learnedWeight, 1)) * Math.min(1, observationCount / 6))) : 0;
       const excluded = !carry || suitability === 0;
@@ -1180,7 +1184,7 @@ export function adaptiveCaddieDecision(
       const reliability = Math.min(1, summary.readings.length / 10);
       const shortPreference = carry > effectiveDistanceM ? ADAPTIVE_CADDIE_V1.shortBias : 0;
       const utility = fit * ADAPTIVE_CADDIE_V1.distanceFitWeight + playable * ADAPTIVE_CADDIE_V1.playableWeight - severe * ADAPTIVE_CADDIE_V1.severeMissPenalty + reliability * ADAPTIVE_CADDIE_V1.reliabilityWeight + suitability * 0.15 - shortPreference + contextualScore;
-      return { club, carryM: carry, distanceGapM: gap, distanceFitScore: fit, playableRate: playable, severeMissRate: severe, lieSuitability: suitability, reliabilityScore: reliability, utility, ...(onCourse.adjustmentM ? { adjustmentM: onCourse.adjustmentM } : {}) };
+      return { club, carryM: carry, distanceGapM: gap, distanceFitScore: fit, playableRate: playable, severeMissRate: severe, lieSuitability: suitability, reliabilityScore: reliability, contextualScore, utility, ...(onCourse.adjustmentM ? { adjustmentM: onCourse.adjustmentM } : {}) };
     });
   const usable = candidates.filter((candidate) => !candidate.excluded);
   // For a green approach, distance is the primary decision: use the shortest
@@ -1191,7 +1195,10 @@ export function adaptiveCaddieDecision(
     const score = (candidate: typeof a) =>
       Math.abs((candidate.carryM || 0) - effectiveDistanceM) +
       (candidate.severeMissRate || 0) * effectiveDistanceM * 0.5 +
-      (1 - (candidate.playableRate || 0)) * effectiveDistanceM * 0.15;
+      (1 - (candidate.playableRate || 0)) * effectiveDistanceM * 0.15 -
+      // Personal results are a conservative tie-breaker, not a replacement
+      // for a club that can safely reach the target.
+      (candidate.contextualScore || 0) * Math.min(8, Math.max(3, effectiveDistanceM * 0.05));
     return score(a) - score(b);
   });
   const best = distanceFirst[0] || usable.sort((a, b) => (b.utility || -Infinity) - (a.utility || -Infinity))[0];
