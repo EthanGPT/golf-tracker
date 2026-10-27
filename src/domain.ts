@@ -274,11 +274,17 @@ export function getOnCourseClubAdjustment(rounds: Round[], club: ClubName, basel
   const evidence: Array<{ kind: "actual" | "short" | "long" | "good"; value: number }> = [];
   for (const round of rounds) for (const hole of round.holes) for (const shot of hole.shots || []) {
     if (shot.club !== club) continue;
-    // GPS travel from short-game shots is useful to display, but it is not
-    // evidence of a full club distance. Only tee/approach shots can calibrate
-    // the caddie's club-distance model, and only near the known carry baseline.
-    const nearBaseline = baselineCarryM === undefined || Math.abs(shot.actualDistanceM! - baselineCarryM) <= 25;
-    if (["tee", "approach"].includes(shot.phase) && shot.actualDistanceM !== undefined && shot.actualDistanceM >= 5 && nearBaseline && shot.startDistanceToTargetM === undefined && shot.endDistanceToTargetM === undefined) {
+    // Tee and approach GPS shots are useful carry evidence too. Keep the
+    // baseline guard so a clearly short recovery or mishit cannot redefine a
+    // club, while allowing context-rich shots captured on the course to count.
+    const shotNotes = [shot.note, ...(shot.outcomes || []).map((outcome) => outcome.note)].filter(Boolean).join(" ");
+    const partialOrRoll = /partial|lay[- ]?up|chip|pitch|recovery|roll[- ]?out|runner|bump/i.test(shotNotes);
+    const explicitlyFull = /full shot|full swing|good contact/i.test(shotNotes);
+    const nearBaseline = baselineCarryM === undefined || Math.abs(shot.actualDistanceM! - baselineCarryM) <= 35;
+    // GPS measures total travel, not carry. Only a clean full-shot signal (or
+    // an older untagged shot) may gently calibrate carry; partial/rolling shots
+    // remain useful for total-distance history but never redefine carry.
+    if (["tee", "approach"].includes(shot.phase) && shot.actualDistanceM !== undefined && shot.actualDistanceM >= 5 && nearBaseline && !partialOrRoll && (explicitlyFull || !shotNotes || !/partial|lay[- ]?up|chip|pitch|recovery|roll[- ]?out|runner|bump/i.test(shotNotes))) {
       evidence.push({ kind: "actual", value: shot.actualDistanceM });
       continue;
     }
@@ -773,6 +779,7 @@ export function caddiePlan(
   readings: RangeReading[],
   par: number,
   targetDistance: number,
+  rounds: Round[] = [],
 ) {
   const clubs = CLUBS.map((club) => ({
     club,
@@ -782,6 +789,7 @@ export function caddiePlan(
   const stats = clubs
     .map(({ club, summary }) => {
       const clubReadings = readings.filter((reading) => reading.club === club);
+      const courseEvidence = onCourseClubOutcomeRates(rounds, club);
       const recent = clubReadings
         .slice()
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -799,18 +807,11 @@ export function caddiePlan(
                   (key === "playable" && item[key] === undefined),
             ).length / items.length
           : 0;
-      const playable =
-        rate(clubReadings, "playable") * 0.7 +
-        (recent.length >= 5
-          ? rate(recent, "playable")
-          : rate(clubReadings, "playable")) *
-          0.3;
-      const severe =
-        rate(clubReadings, "severeMiss") * 0.7 +
-        (recent.length >= 5
-          ? rate(recent, "severeMiss")
-          : rate(clubReadings, "severeMiss")) *
-          0.3;
+      const rangePlayable = rate(clubReadings, "playable") * 0.7 + (recent.length >= 5 ? rate(recent, "playable") : rate(clubReadings, "playable")) * 0.3;
+      const rangeSevere = rate(clubReadings, "severeMiss") * 0.7 + (recent.length >= 5 ? rate(recent, "severeMiss") : rate(clubReadings, "severeMiss")) * 0.3;
+      const totalEvidence = clubReadings.length + courseEvidence.tracked;
+      const playable = totalEvidence ? (rangePlayable * clubReadings.length + courseEvidence.playable * courseEvidence.tracked) / totalEvidence : rangePlayable;
+      const severe = totalEvidence ? (rangeSevere * clubReadings.length + courseEvidence.severe * courseEvidence.tracked) / totalEvidence : rangeSevere;
       return { club, carry: summary.typical!, playable, severe };
     })
     .sort((a, b) => b.carry - a.carry);
@@ -820,12 +821,17 @@ export function caddiePlan(
     item.carry * (1 - item.severe) ** 2 * (0.85 + item.playable * 0.15);
   // Tee selection evaluates the whole bag. An iron can be the correct tee
   // club when its carry is sufficient and its penalty risk is materially lower.
-  const tee = stats
+  const riskTee = stats
     .slice()
     .sort((a, b) => teeScore(b) - teeScore(a))[0];
-  // Driver and 3W are tee clubs. 4W-Hybrid remains available from the fairway.
+  // A par 5 defaults to the driver's progress when it has a usable personal
+  // sample. Risk still wins when the driver is genuinely costing shots.
+  const driver = stats.find((item) => item.club === "Dr");
+  const tee = par === 5 && driver && driver.severe < 0.35 ? driver : riskTee;
+  // Driver is a tee club; woods remain available from the fairway for the
+  // second shot on a par 5 when the next club does not reach.
   const fairwayClubs = stats.filter(
-    (item) => !["Dr", "3W"].includes(item.club),
+    (item) => item.club !== "Dr",
   );
   const sequence: typeof stats = [];
   let remaining = targetDistance;
@@ -923,8 +929,9 @@ export function caddieDecision(
   par: number,
   targetDistance: number,
   selectedClub?: ClubName,
+  rounds: Round[] = [],
 ): CaddieDecision | undefined {
-  const result = caddiePlan(readings, par, targetDistance);
+  const result = caddiePlan(readings, par, targetDistance, rounds);
   if (!result) return undefined;
   const primary = selectedClub ? { club: selectedClub } as typeof result.sequence[number] : result.sequence[0];
   const followUp = result.sequence[1];
@@ -1016,9 +1023,9 @@ export function resolveTeeDecision(
   rounds: Round[] = [],
   context?: { courseId?: string; holeNumber?: number; tee?: string },
 ) {
-  const plan = caddiePlan(readings, par, targetDistance);
+  const plan = caddiePlan(readings, par, targetDistance, rounds);
   if (!plan) return undefined;
-  const explanation = caddieDecision(readings, par, targetDistance);
+  const explanation = caddieDecision(readings, par, targetDistance, undefined, rounds);
   const teeCandidates = [...new Set([plan.tee.club, "Dr", "3W", "4W-Hybrid"] as ClubName[])]
     .filter((club) => clubSummary(readings, club).typical !== undefined && isTeeTargetReachable(readings, club, targetDistance));
   const learned = teeCandidates.map((club) => {
@@ -1034,7 +1041,7 @@ export function resolveTeeDecision(
   // break ties, while normal tee holes use the broader tee-risk selection.
   const plannedClub = par === 3 ? plan.sequence[0]?.club || plan.tee.club : plan.tee.club;
   const selectedClub = par !== 3 && learnedBest && learnedBest.score > 0 ? learnedBest.club : plannedClub;
-  const selectedExplanation = caddieDecision(readings, par, targetDistance, selectedClub);
+  const selectedExplanation = caddieDecision(readings, par, targetDistance, selectedClub, rounds);
   const selectedSummary = clubSummary(readings, selectedClub);
   const selectedTee = selectedSummary.typical === undefined || selectedClub === plan.tee.club
     ? plan.tee
@@ -1061,13 +1068,13 @@ export const ADAPTIVE_CADDIE_V1 = {
   lieSuitability: {
     tee: { Dr: 1, "3W": 0.98, "4W-Hybrid": 0.98, iron: 0.95 },
     fairway: { Dr: 0, "3W": 1, "4W-Hybrid": 1, iron: 1 },
-    rough: { Dr: 0, "3W": 0.45, "4W-Hybrid": 0.78, iron: 0.95 },
+    rough: { Dr: 0, "3W": 0, "4W-Hybrid": 0.9, longIron: 0.95, iron: 1 },
     bunker: { Dr: 0, "3W": 0, "4W-Hybrid": 0, longIron: 0.45, iron: 0.9 },
   },
 } as const;
 
 const adaptiveClubKind = (club: ClubName) =>
-  club === "Dr" ? "Dr" : club === "3W" ? "3W" : club === "4W-Hybrid" ? "4W-Hybrid" : ["6i", "7i"].includes(club) ? "longIron" : "iron";
+  club === "Dr" ? "Dr" : club === "3W" ? "3W" : club === "4W-Hybrid" ? "4W-Hybrid" : ["4i", "5i", "6i", "7i"].includes(club) ? "longIron" : "iron";
 
 function lieSuitability(club: ClubName, lie: ShotLie) {
   if (lie === "green") return club === "Putter" ? 1 : 0;
@@ -1156,10 +1163,9 @@ export function adaptiveCaddieDecision(
       const summary = clubSummary(readings, club);
       const carry = summary.typical;
       const suitability = lieSuitability(club, lie);
-      // Keep GPS on-course distances observational for now. They are shown in
-      // the tracker, but must not influence caddie club selection until there
-      // is enough clean, full-shot evidence.
-      const onCourse = { adjustmentM: 0 };
+      // Let clean on-course tee/approach observations nudge the effective
+      // target. Range carry remains the baseline; course evidence adapts it.
+      const onCourse = getOnCourseClubAdjustment(rounds, club, carry);
       const learned = getContextEvidence(rounds, {
         phase: lie === "tee" ? "tee" : "approach",
         club,
@@ -1177,10 +1183,19 @@ export function adaptiveCaddieDecision(
       const contextualScore = observationCount >= 2 ? Math.max(-0.18, Math.min(0.18, ((learnedPositive - learnedNegative) / Math.max(learnedWeight, 1)) * Math.min(1, observationCount / 6))) : 0;
       const excluded = !carry || suitability === 0;
       if (excluded) return { club, carryM: carry, lieSuitability: suitability, excluded: true, exclusionReason: !carry ? "No carry data" : "Not suitable from this lie" };
-      const gap = Math.abs(carry - (effectiveDistanceM + onCourse.adjustmentM));
+      const adjustedTarget = effectiveDistanceM + onCourse.adjustmentM;
+      const gap = Math.abs(carry - adjustedTarget);
       const fit = Math.max(0, 1 - gap / Math.max(effectiveDistanceM, 1));
-      const playable = summary.playablePercentage === undefined ? 0.5 : summary.playablePercentage / 100;
-      const severe = summary.severeMissPercentage === undefined ? 0.15 : summary.severeMissPercentage / 100;
+      const courseEvidence = onCourseClubOutcomeRates(rounds, club);
+      const rangeCount = summary.readings.length;
+      const courseCount = courseEvidence.tracked;
+      const totalEvidence = rangeCount + courseCount;
+      const playable = totalEvidence
+        ? ((summary.playablePercentage === undefined ? 0.5 : summary.playablePercentage / 100) * rangeCount + courseEvidence.playable * courseCount) / totalEvidence
+        : 0.5;
+      const severe = totalEvidence
+        ? ((summary.severeMissPercentage === undefined ? 0.15 : summary.severeMissPercentage / 100) * rangeCount + courseEvidence.severe * courseCount) / totalEvidence
+        : 0.15;
       const reliability = Math.min(1, summary.readings.length / 10);
       const shortPreference = carry > effectiveDistanceM ? ADAPTIVE_CADDIE_V1.shortBias : 0;
       const utility = fit * ADAPTIVE_CADDIE_V1.distanceFitWeight + playable * ADAPTIVE_CADDIE_V1.playableWeight - severe * ADAPTIVE_CADDIE_V1.severeMissPenalty + reliability * ADAPTIVE_CADDIE_V1.reliabilityWeight + suitability * 0.15 - shortPreference + contextualScore;
@@ -1196,6 +1211,7 @@ export function adaptiveCaddieDecision(
       Math.abs((candidate.carryM || 0) - effectiveDistanceM) +
       (candidate.severeMissRate || 0) * effectiveDistanceM * 0.5 +
       (1 - (candidate.playableRate || 0)) * effectiveDistanceM * 0.15 -
+      (1 - (candidate.lieSuitability || 0)) * effectiveDistanceM * 0.3 -
       // Personal results are a conservative tie-breaker, not a replacement
       // for a club that can safely reach the target.
       (candidate.contextualScore || 0) * Math.min(8, Math.max(3, effectiveDistanceM * 0.05));
@@ -1209,6 +1225,25 @@ export function adaptiveCaddieDecision(
   if (best.severeMissRate !== undefined) reasons.push({ key: "adaptive-severe", label: "Severe miss", value: `${Math.round(best.severeMissRate * 100)}% severe miss`, tone: best.severeMissRate > 0.15 ? "warning" : "neutral" });
   reasons.push({ key: "adaptive-fit", label: "Reason", value: best.carryM && best.carryM >= effectiveDistanceM ? "Shortest reliable club that reaches" : "Best available distance/risk balance", tone: "positive" });
   return { recommendedClub: best.club, targetDistanceM, effectiveDistanceM, lie, candidates, reasons, status: "recommended" };
+}
+
+export function onCourseClubOutcomeRates(rounds: Round[], club: ClubName) {
+  const severePattern = /slice|hook|out of bounds|water|lost ball|penalty|top|topped|poor contact|severe miss/i;
+  const playablePattern = /fairway found|hit green|good contact|good direction|good distance|good decision|good recovery/i;
+  const notPlayablePattern = /missed left|missed right|poor direction|poor lie|wrong club|bad decision|rough/i;
+  const shots = rounds
+    .filter((round) => round.status === "archived")
+    .flatMap((round) => round.holes.flatMap((hole) => hole.shots || []))
+    .filter((shot) => shot.club === club && shot.phase !== "putting" && (shot.outcomes?.length || shot.note));
+  let playable = 0;
+  let severe = 0;
+  shots.forEach((shot) => {
+    const notes = [shot.note, ...(shot.outcomes || []).map((item) => item.note)].filter(Boolean).join(" ");
+    if (playablePattern.test(notes)) playable += 1;
+    else if (!notPlayablePattern.test(notes) && !severePattern.test(notes)) playable += 0.5;
+    if (severePattern.test(notes)) severe += 1;
+  });
+  return { tracked: shots.length, playable: shots.length ? playable / shots.length : 0.5, severe: shots.length ? severe / shots.length : 0.15 };
 }
 
 export function isValidGolfShotContext(distanceM: number, officialHoleDistanceM = 0, gpsAccuracyM?: number) {
@@ -1285,14 +1320,18 @@ export function roundTotal(round: Round) {
 }
 
 /** Reliable GPS-measured total-travel distances for non-putting shots. */
-export function onCourseDistanceReadings(rounds: Round[], baselineReadings: RangeReading[] = [], toleranceM = 25): RangeReading[] {
+export function onCourseDistanceReadings(rounds: Round[], baselineReadings: RangeReading[] = [], toleranceM = 25, includeOutliers = false): RangeReading[] {
   return rounds
     .filter((round) => round.status === "archived")
     .flatMap((round) => round.holes.flatMap((hole) => (hole.shots || [])
       .filter((shot) => {
         if (shot.phase === "putting" || !shot.club || shot.club === "Putter" || shot.actualDistanceM === undefined || shot.actualDistanceM < 5) return false;
+        const hardMaximum = clubTotalDistanceCeiling(shot.club);
         const baseline = clubSummary(baselineReadings, shot.club).typical;
-        return baseline === undefined || Math.abs(shot.actualDistanceM - baseline) <= toleranceM;
+        // The optional wider history tolerance preserves legitimate roll-out
+        // and partial-shot travel, but still blocks late Next Shot clicks.
+        const upperTolerance = includeOutliers ? Math.max(35, toleranceM) : toleranceM;
+        return shot.actualDistanceM <= hardMaximum && (baseline === undefined || shot.actualDistanceM <= baseline + upperTolerance);
       })
       .map((shot) => ({
         id: `on-course-${round.id}-${hole.holeNumber}-${shot.id}`,
@@ -1302,6 +1341,19 @@ export function onCourseDistanceReadings(rounds: Round[], baselineReadings: Rang
         sessionDate: round.date,
         createdAt: round.archivedAt || round.date,
       }))));
+}
+
+function clubTotalDistanceCeiling(club: ClubName) {
+  if (club === "Dr") return 360;
+  if (["3W", "5W"].includes(club)) return 330;
+  if (club === "4W-Hybrid" || /hybrid/i.test(club)) return 300;
+  if (club === "5i") return 250;
+  if (club === "6i") return 235;
+  if (club === "7i") return 220;
+  if (club === "8i") return 205;
+  if (club === "9i") return 190;
+  if (["PW", "AW", "GW", "SW"].includes(club)) return 170;
+  return 280;
 }
 
 /** Putting averages based only on holes where putting shots were recorded. */

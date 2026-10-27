@@ -33,6 +33,8 @@ import {
   puttCountFromShot,
   onCourseDistanceReadings,
   roundHandicapIndex,
+  normalizedRoundScore,
+  onCourseClubOutcomeRates,
   currentHandicapIndex,
   roundTroubleDetailsByCategory,
   roundTroubleByCategory,
@@ -174,6 +176,7 @@ function App() {
   const [roundHasStarted, setRoundHasStarted] = useState(false);
   const [roundWeather, setRoundWeather] = useState<WeatherContext>();
   const [completedRoundId, setCompletedRoundId] = useState<string | null>(null);
+  const [showRoundSuccess, setShowRoundSuccess] = useState(false);
   const [handicapPromptRoundId, setHandicapPromptRoundId] = useState<string | null>(null);
   const [settingsEditor, setSettingsEditor] = useState<"course" | "tee" | "handicap" | null>(null);
   const [, setGeometryVersion] = useState(0);
@@ -382,7 +385,7 @@ function App() {
     if (localStorage.getItem(`golf-tracker-handicap-prompt-${latestRound.id}`)) return;
     setHandicapPromptRoundId(latestRound.id);
   }, [latestRound?.id, latestRound?.date]);
-  const onCourseReadings = onCourseDistanceReadings(data?.rounds || [], data?.readings || []);
+  const onCourseReadings = onCourseDistanceReadings(data?.rounds || [], data?.readings || [], 25, true);
   const rec = personalisedRecommendation(
     data?.rounds || [],
     data?.readings || [],
@@ -611,7 +614,7 @@ function App() {
     setRoundHasStarted(false);
     setRoundNotice("Round archived");
     setCompletedRoundId(updated.id);
-    setScreen("progress");
+    setShowRoundSuccess(true);
   };
   const updatePlan = (
     key:
@@ -743,6 +746,7 @@ function App() {
         {screen === "distances" && (
           <Distances
             readings={data.readings}
+            rounds={data.rounds}
             onCourseReadings={onCourseReadings}
             bag={data.bag}
             units="metres"
@@ -792,6 +796,13 @@ function App() {
             <button className="text-button" onClick={() => { localStorage.setItem(`golf-tracker-handicap-prompt-${handicapPromptRoundId}`, "dismissed"); setHandicapPromptRoundId(null); }}>Not now</button>
           </div>
         </div>
+      )}
+      {showRoundSuccess && completedRoundId && data.rounds.find((round) => round.id === completedRoundId) && (
+        <RoundSuccess
+          round={data.rounds.find((round) => round.id === completedRoundId)!}
+          rounds={data.rounds.filter((round) => round.status === "archived")}
+          onClose={() => { setShowRoundSuccess(false); setScreen("progress"); }}
+        />
       )}
       <nav className="bottom-nav">
         {navItems.map(({ id, label, icon: Icon }) => (
@@ -1598,14 +1609,24 @@ function Range({
   );
 }
 
+function onCourseClubGroup(club: string) {
+  if (club === "Dr") return "Driver";
+  if (["3W", "5W"].includes(club)) return "Woods";
+  if (club === "4W-Hybrid" || /hybrid/i.test(club)) return "Hybrids";
+  if (["PW", "AW", "GW", "SW"].includes(club)) return "Wedges";
+  return "Irons";
+}
+
 function Distances({
   readings,
+  rounds,
   onCourseReadings,
   bag,
   units,
   setUnits,
 }: {
   readings: AppData["readings"];
+  rounds: AppData["rounds"];
   onCourseReadings: AppData["readings"];
   bag?: ClubName[];
   units: "metres" | "yards";
@@ -1613,7 +1634,7 @@ function Distances({
 }) {
   const [expandedClub, setExpandedClub] = useState<ClubName | null>(null);
   const distanceOrder = ["Dr", "3W", "5W", "4W-Hybrid", "2i", "3i", "4i", "5i", "6i", "7i", "8i", "9i", "PW", "AW", "GW", "SW", "Putter"];
-  const clubs = [...(bag?.length ? bag : DEFAULT_BAG)].filter((club) => club !== "Putter").sort((a, b) => {
+  const clubs = [...new Set([...(bag?.length ? bag : DEFAULT_BAG), "SW"])].filter((club) => club !== "Putter").sort((a, b) => {
     const ai = distanceOrder.indexOf(a);
     const bi = distanceOrder.indexOf(b);
     return (ai < 0 ? distanceOrder.length : ai) - (bi < 0 ? distanceOrder.length : bi);
@@ -1647,6 +1668,11 @@ function Distances({
       <div className="distance-board">
         {clubs.map((club) => {
           const summary = clubSummary(readings, club);
+          const course = onCourseClubOutcomeRates(rounds, club);
+          const rangeCount = summary.readings.length;
+          const evidenceCount = rangeCount + course.tracked;
+          const playablePercentage = evidenceCount ? Math.round(((summary.playablePercentage === undefined ? 50 : summary.playablePercentage) * rangeCount / 100 + course.playable * course.tracked) / evidenceCount * 100) : summary.playablePercentage;
+          const severeMissPercentage = evidenceCount ? Math.round(((summary.severeMissPercentage === undefined ? 15 : summary.severeMissPercentage) * rangeCount / 100 + course.severe * course.tracked) / evidenceCount * 100) : summary.severeMissPercentage;
           return (
             <button
               className={`distance-card ${expandedClub === club ? "expanded" : ""}`}
@@ -1669,23 +1695,23 @@ function Distances({
                   </span>
                   <span className="distance-reliability">
                     <span className="playable-mark">
-                      ✓ {summary.playablePercentage ?? 0}%
+                      ✓ {playablePercentage ?? 0}%
                     </span>
                     <span
                       className={
-                        (summary.severeMissPercentage || 0) > 0
+                        (severeMissPercentage || 0) > 0
                           ? "severe-mark warning"
                           : "severe-mark"
                       }
                     >
-                      ⚠ {summary.severeMissPercentage ?? 0}%
+                      ⚠ {severeMissPercentage ?? 0}%
                     </span>
                   </span>
                   {expandedClub === club && (
                     <small className="distance-detail">
                       {summary.usableCount} shots ·{" "}
-                      {summary.playablePercentage ?? 0}% playable ·{" "}
-                      {summary.severeMissPercentage ?? 0}% severe
+                      {playablePercentage ?? 0}% playable ·{" "}
+                      {severeMissPercentage ?? 0}% severe
                     </small>
                   )}
                 </>
@@ -1699,23 +1725,32 @@ function Distances({
       <section className="panel on-course-distance-panel">
         <div className="section-heading">
           <div>
-            <span className="eyebrow">GPS MEASURED · FILTERED</span>
+            <span className="eyebrow">GPS MEASURED · TOTAL TRAVEL</span>
             <h3>On-course total distance</h3>
           </div>
           <span className="count-pill">{onCourseReadings.length} shots</span>
         </div>
         {onCourseReadings.length ? (
           <div className="on-course-distance-list">
-            {Object.entries(onCourseReadings.reduce<Record<string, number[]>>((groups, reading) => {
-              (groups[reading.club] ||= []).push(reading.distanceMetres);
-              return groups;
-            }, {})).sort(([a], [b]) => a.localeCompare(b)).map(([club, distances]) => {
-              const ordered = distances.slice().sort((a, b) => b - a);
-              const typical = ordered[Math.floor(ordered.length / 2)];
-              return <div className="on-course-distance-row" key={club}><strong>{clubDisplayLabel(club)}</strong><b>{convertMetres(typical, units)} {units === "metres" ? "m" : "yd"}</b><span>{ordered.map((distance) => `${convertMetres(distance, units)}${units === "metres" ? "m" : "yd"}`).join(" · ")}</span></div>;
-            })}
+            {(() => {
+              const groups = Object.entries(onCourseReadings.reduce<Record<string, number[]>>((all, reading) => {
+                (all[reading.club] ||= []).push(reading.distanceMetres);
+                return all;
+              }, {}));
+              const clubNames = groups.map(([club]) => club);
+              return (["Driver", "Woods", "Hybrids", "Irons", "Wedges"] as const).map((group) => {
+                const rows = clubNames.filter((club) => onCourseClubGroup(club) === group).map((club) => [club, groups.find(([name]) => name === club)?.[1] || []] as [string, number[]]);
+                if (!rows.length) return null;
+                return <Fragment key={group}>{rows.map(([club, distances]) => {
+                  const ordered = distances.slice().sort((a, b) => a - b);
+                  const middle = (ordered.length - 1) / 2;
+                  const median = ordered[Math.floor(middle)] === ordered[Math.ceil(middle)] ? ordered[Math.floor(middle)] : (ordered[Math.floor(middle)] + ordered[Math.ceil(middle)]) / 2;
+                  return <div className="on-course-distance-row" key={club}><strong>{clubDisplayLabel(club)}</strong><b>{convertMetres(median, units)} {units === "metres" ? "m" : "yd"} median</b><span>{distances.length} shot{distances.length === 1 ? "" : "s"}</span></div>;
+                })}</Fragment>;
+              });
+            })()}
           </div>
-        ) : <p>Tap Next Shot at your ball during a round to record total ball travel. Measurements more than 25 m from your range baseline are excluded as outliers.</p>}
+        ) : <p>Tap Next Shot at your ball before and after a shot to record total ball travel. Only clean full-shot evidence influences carry calibration.</p>}
       </section>
     </div>
   );
@@ -2371,6 +2406,8 @@ function Progress({
   const [insightsTab, setInsightsTab] = useState<
     "overview" | "clubs" | "rounds"
   >("overview");
+  const [accuracyMetric, setAccuracyMetric] = useState<"fir" | "gir" | "threePutts" | null>(null);
+  const [trendModal, setTrendModal] = useState<{ title: string; points: Array<{ date: string; value: number }> } | null>(null);
   const archived = data.rounds
     .filter((round) => round.status === "archived")
     .sort((a, b) => a.date.localeCompare(b.date));
@@ -2435,6 +2472,10 @@ function Progress({
   const latestScore = latestRound ? latestRound.totalScore || roundTotal(latestRound) : undefined;
   const latestHoles = latestRound ? latestRound.holes.filter((hole) => hole.score > 0).length || latestRound.holes.length : 0;
   const latestPar = latestRound ? latestRound.holes.reduce((sum, hole) => sum + holePar(hole.holeNumber, latestRound.courseId), 0) : 0;
+  const rankedRounds = archived
+    .map((round) => ({ round, score: normalizedRoundScore(round, 18) }))
+    .sort((a, b) => a.score - b.score || b.round.date.localeCompare(a.round.date));
+  const roundAccuracy = archived.map((round) => ({ round, stats: roundAccuracyStats([round]) }));
   // Accuracy cards describe the player's recorded rounds as a whole. The
   // hero remains a latest-round view, but FIR/GIR/3-putt must not reset after
   // every new round.
@@ -2506,18 +2547,18 @@ function Progress({
       </section>
       {insightsTab === "overview" && <>
       <section className="metric-grid round-accuracy-grid" aria-label="Round accuracy">
-        <div className="metric">
+        <button className="metric metric-button" onClick={() => setAccuracyMetric("fir")}>
           <span>FIR</span>
           <strong>{allRoundAccuracy?.fir == null ? "—" : `${allRoundAccuracy.fir}%`}</strong>
-        </div>
-        <div className="metric">
+        </button>
+        <button className="metric metric-button" onClick={() => setAccuracyMetric("gir")}>
           <span>GIR</span>
           <strong>{allRoundAccuracy?.gir == null ? "—" : `${allRoundAccuracy.gir}%`}</strong>
-        </div>
-        <div className="metric">
+        </button>
+        <button className="metric metric-button" onClick={() => setAccuracyMetric("threePutts")}>
           <span>3-putt rate</span>
           <strong>{allRoundAccuracy?.threePutts == null ? "—" : `${allRoundAccuracy.threePutts}%`}</strong>
-        </div>
+        </button>
       </section>
       <section className="panel putting-summary-panel">
         <div className="section-heading">
@@ -2528,22 +2569,22 @@ function Progress({
           <span className="count-pill">{putting.roundsTracked ? `${putting.roundsTracked} round${putting.roundsTracked === 1 ? "" : "s"}` : "No data"}</span>
         </div>
         <div className="metric-grid putting-breakdown-grid">
-          <div className="metric">
+          <button className="metric metric-button" onClick={() => setTrendModal({ title: "Putts per 18", points: archived.map((round) => ({ date: round.date, value: puttingStats([round]).per18 })).filter((point): point is { date: string; value: number } => point.value != null) })}>
             <span>Putts / 18</span>
             <strong>{putting.per18 == null ? "—" : putting.per18.toFixed(1)}</strong>
-          </div>
-          <div className="metric">
+          </button>
+          <button className="metric metric-button" onClick={() => setTrendModal({ title: "1-putt holes", points: archived.map((round) => ({ date: round.date, value: puttingStats([round]).onePuttRate })).filter((point): point is { date: string; value: number } => point.value != null) })}>
             <span>1-putt holes</span>
             <strong>{putting.onePuttRate == null ? "—" : `${putting.onePuttRate}%`}</strong>
-          </div>
-          <div className="metric">
+          </button>
+          <button className="metric metric-button" onClick={() => setTrendModal({ title: "2-putt holes", points: archived.map((round) => ({ date: round.date, value: puttingStats([round]).twoPuttRate })).filter((point): point is { date: string; value: number } => point.value != null) })}>
             <span>2-putt holes</span>
             <strong>{putting.twoPuttRate == null ? "—" : `${putting.twoPuttRate}%`}</strong>
-          </div>
-          <div className="metric">
+          </button>
+          <button className="metric metric-button" onClick={() => setTrendModal({ title: "3+ putt holes", points: archived.map((round) => ({ date: round.date, value: puttingStats([round]).threePlusPuttRate })).filter((point): point is { date: string; value: number } => point.value != null) })}>
             <span>3+ putt holes</span>
             <strong>{putting.threePlusPuttRate == null ? "—" : `${putting.threePlusPuttRate}%`}</strong>
-          </div>
+          </button>
         </div>
         <small className="panel-footnote">Based on {putting.holesTracked || 0} holes with an explicit putt count.</small>
       </section>
@@ -2556,10 +2597,10 @@ function Progress({
           <span className="count-pill">{allRoundAccuracy?.scoringStats.holes || 0} holes</span>
         </div>
         <div className="metric-grid scoring-mix-grid">
-          <div className="metric"><span>Birdie+</span><strong>{allRoundAccuracy?.scoringStats.birdieOrBetterRate == null ? "—" : `${allRoundAccuracy.scoringStats.birdieOrBetterRate}%`}</strong></div>
-          <div className="metric"><span>Par</span><strong>{allRoundAccuracy?.scoringStats.parRate == null ? "—" : `${allRoundAccuracy.scoringStats.parRate}%`}</strong></div>
-          <div className="metric"><span>Bogey</span><strong>{allRoundAccuracy?.scoringStats.bogeyRate == null ? "—" : `${allRoundAccuracy.scoringStats.bogeyRate}%`}</strong></div>
-          <div className="metric"><span>Double+</span><strong>{allRoundAccuracy?.scoringStats.doubleBogeyOrWorseRate == null ? "—" : `${allRoundAccuracy.scoringStats.doubleBogeyOrWorseRate}%`}</strong></div>
+          <button className="metric metric-button" onClick={() => setTrendModal({ title: "Birdie+ holes", points: archived.map((round) => ({ date: round.date, value: roundAccuracyStats([round]).scoringStats.birdieOrBetterRate })).filter((point): point is { date: string; value: number } => point.value != null) })}><span>Birdie+</span><strong>{allRoundAccuracy?.scoringStats.birdieOrBetterRate == null ? "—" : `${allRoundAccuracy.scoringStats.birdieOrBetterRate}%`}</strong></button>
+          <button className="metric metric-button" onClick={() => setTrendModal({ title: "Par holes", points: archived.map((round) => ({ date: round.date, value: roundAccuracyStats([round]).scoringStats.parRate })).filter((point): point is { date: string; value: number } => point.value != null) })}><span>Par</span><strong>{allRoundAccuracy?.scoringStats.parRate == null ? "—" : `${allRoundAccuracy.scoringStats.parRate}%`}</strong></button>
+          <button className="metric metric-button" onClick={() => setTrendModal({ title: "Bogey holes", points: archived.map((round) => ({ date: round.date, value: roundAccuracyStats([round]).scoringStats.bogeyRate })).filter((point): point is { date: string; value: number } => point.value != null) })}><span>Bogey</span><strong>{allRoundAccuracy?.scoringStats.bogeyRate == null ? "—" : `${allRoundAccuracy.scoringStats.bogeyRate}%`}</strong></button>
+          <button className="metric metric-button" onClick={() => setTrendModal({ title: "Double+ holes", points: archived.map((round) => ({ date: round.date, value: roundAccuracyStats([round]).scoringStats.doubleBogeyOrWorseRate })).filter((point): point is { date: string; value: number } => point.value != null) })}><span>Double+</span><strong>{allRoundAccuracy?.scoringStats.doubleBogeyOrWorseRate == null ? "—" : `${allRoundAccuracy.scoringStats.doubleBogeyOrWorseRate}%`}</strong></button>
         </div>
       </section>
       </>}
@@ -2784,8 +2825,62 @@ function Progress({
             />
           )}
       </section>
+      {insightsTab === "rounds" && <section className="panel personal-leaderboard">
+        <div className="section-heading"><div><span className="eyebrow">PERSONAL LEADERBOARD</span><h3>Your rounds ranked</h3></div><strong className="count-pill">best pace</strong></div>
+        <p className="panel-footnote">Normalized to 18 holes so 9-hole and 18-hole rounds can sit together.</p>
+        {rankedRounds.length ? rankedRounds.map(({ round, score }, index) => { const stats = roundAccuracyStats([round]); return <button type="button" className="leaderboard-row" key={round.id} onClick={() => setSelectedRoundId(round.id)}><b className="leaderboard-rank">{index + 1}</b><span><strong>{formatDate(round.date)}</strong><small>{round.courseName || "Local round"}</small><small>FIR {stats.fir == null ? "—" : `${stats.fir}%`} · GIR {stats.gir == null ? "—" : `${stats.gir}%`} · 3P {stats.threePutts == null ? "—" : `${stats.threePutts}%`}</small></span><strong>{Math.round(score)} <small>pace</small></strong></button>; }) : <p>No rounds ranked yet.</p>}
+      </section>}
+      {accuracyMetric && <AccuracyTrendModal metric={accuracyMetric} data={roundAccuracy} onClose={() => setAccuracyMetric(null)} />}
+      {trendModal && <MetricTrendModal title={trendModal.title} points={trendModal.points.slice(-8)} onClose={() => setTrendModal(null)} />}
     </div>
   );
+}
+
+function AccuracyTrendModal({ metric, data, onClose }: { metric: "fir" | "gir" | "threePutts"; data: Array<{ round: AppData["rounds"][number]; stats: ReturnType<typeof roundAccuracyStats> }>; onClose: () => void }) {
+  const labels = { fir: "Fairways hit", gir: "Greens in regulation", threePutts: "Three-putt rate" };
+  const latest = data.slice(-8);
+  const values = latest.map(({ stats }) => stats[metric]).filter((value): value is number => value != null);
+  return <div className="success-overlay" onClick={onClose}><div className="accuracy-modal" onClick={(event) => event.stopPropagation()}><div className="section-heading"><div><span className="eyebrow">LATEST ROUNDS</span><h3>{labels[metric]}</h3></div><button className="modal-close" onClick={onClose}>×</button></div>{values.length ? <><AccuracyChart metric={metric} data={latest} /><div className="accuracy-history">{latest.slice().reverse().map(({ round, stats }) => <div key={round.id}><span>{formatShortDate(round.date)}</span><strong>{stats[metric] == null ? "—" : `${stats[metric]}%`}</strong></div>)}</div></> : <p className="panel-footnote">Add the relevant shot details in a round to build this graph.</p>}<button className="primary-button" onClick={onClose}>Done</button></div></div>;
+}
+
+function AccuracyChart({ metric, data }: { metric: "fir" | "gir" | "threePutts"; data: Array<{ round: AppData["rounds"][number]; stats: ReturnType<typeof roundAccuracyStats> }> }) {
+  const plotted = data.map(({ round, stats }) => ({ date: round.date, value: stats[metric] })).filter((item): item is { date: string; value: number } => item.value != null);
+  const left = 38;
+  const right = 350;
+  const top = 20;
+  const bottom = 158;
+  const x = (index: number) => plotted.length === 1 ? (left + right) / 2 : left + (index / (plotted.length - 1)) * (right - left);
+  const y = (value: number) => bottom - (value / 100) * (bottom - top);
+  const points = plotted.map((item, index) => `${x(index)},${y(item.value)}`).join(" ");
+  return <div className="accuracy-chart"><svg viewBox="0 0 370 195" role="img" aria-label={`${metric} by round`}><line className="chart-axis" x1={left} y1={top} x2={left} y2={bottom} /><line className="chart-axis" x1={left} y1={bottom} x2={right} y2={bottom} />{[0, 25, 50, 75, 100].map((tick) => <g key={tick}><line className="chart-grid" x1={left} y1={y(tick)} x2={right} y2={y(tick)} /><text className="chart-axis-label" x={left - 8} y={y(tick) + 4} textAnchor="end">{tick}%</text></g>)}{points && <polyline className="accuracy-line" points={points} />}{plotted.map((item, index) => <g key={`${item.date}-${index}`}><circle className="accuracy-point" cx={x(index)} cy={y(item.value)} r="4" /><text className="chart-date-label" x={x(index)} y={bottom + 20} textAnchor="middle">{formatShortDate(item.date)}</text></g>)}</svg></div>;
+}
+
+function MetricTrendModal({ title, points, onClose }: { title: string; points: Array<{ date: string; value: number }>; onClose: () => void }) {
+  return <div className="success-overlay" onClick={onClose}><div className="accuracy-modal" onClick={(event) => event.stopPropagation()}><div className="section-heading"><div><span className="eyebrow">LATEST ROUNDS</span><h3>{title}</h3></div><button className="modal-close" onClick={onClose}>×</button></div>{points.length ? <><TrendChart points={points} /><div className="accuracy-history">{points.slice().reverse().map((point) => <div key={point.date}><span>{formatShortDate(point.date)}</span><strong>{point.value.toFixed(1).replace(/\.0$/, "")}{title === "Putts per 18" ? "" : "%"}</strong></div>)}</div></> : <p className="panel-footnote">Add more round detail to build this graph.</p>}<button className="primary-button" onClick={onClose}>Done</button></div></div>;
+}
+
+function TrendChart({ points }: { points: Array<{ date: string; value: number }> }) {
+  const left = 38;
+  const right = 350;
+  const top = 20;
+  const bottom = 158;
+  const max = Math.max(100, Math.ceil(Math.max(...points.map((point) => point.value), 1) / 10) * 10);
+  const x = (index: number) => points.length === 1 ? (left + right) / 2 : left + (index / (points.length - 1)) * (right - left);
+  const y = (value: number) => bottom - (value / max) * (bottom - top);
+  const line = points.map((point, index) => `${x(index)},${y(point.value)}`).join(" ");
+  return <div className="accuracy-chart"><svg viewBox="0 0 370 195" role="img" aria-label="Metric by round"><line className="chart-axis" x1={left} y1={top} x2={left} y2={bottom} /><line className="chart-axis" x1={left} y1={bottom} x2={right} y2={bottom} />{[0, 0.25, 0.5, 0.75, 1].map((ratio) => <g key={ratio}><line className="chart-grid" x1={left} y1={y(max * ratio)} x2={right} y2={y(max * ratio)} /><text className="chart-axis-label" x={left - 8} y={y(max * ratio) + 4} textAnchor="end">{Math.round(max * ratio)}</text></g>)}<polyline className="accuracy-line" points={line} />{points.map((point, index) => <g key={`${point.date}-${index}`}><circle className="accuracy-point" cx={x(index)} cy={y(point.value)} r="4" /><text className="chart-date-label" x={x(index)} y={bottom + 20} textAnchor="middle">{formatShortDate(point.date)}</text></g>)}</svg></div>;
+}
+
+function RoundSuccess({ round, rounds, onClose }: { round: AppData["rounds"][number]; rounds: AppData["rounds"]; onClose: () => void }) {
+  const score = round.totalScore || roundTotal(round);
+  const par = round.holes.reduce((sum, hole) => sum + holePar(hole.holeNumber, round.courseId), 0);
+  const accuracy = roundAccuracyStats([round]);
+  const distances = Object.entries(round.holes.flatMap((hole) => hole.shots || []).reduce<Record<string, number[]>>((all, shot) => {
+    if (shot.club && shot.actualDistanceM && shot.actualDistanceM >= 5 && shot.phase !== "putting") (all[shot.club] ||= []).push(shot.actualDistanceM);
+    return all;
+  }, {})).map(([club, values]) => [club, Math.round(values.reduce((sum, value) => sum + value, 0) / values.length)] as const).slice(0, 4);
+  const rank = [...rounds].sort((a, b) => normalizedRoundScore(a, 18) - normalizedRoundScore(b, 18)).findIndex((item) => item.id === round.id) + 1;
+  return <div className="success-overlay" onClick={onClose}><div className="success-card" onClick={(event) => event.stopPropagation()}><div className="success-mark"><Check size={24} /></div><span className="eyebrow">ROUND COMPLETE</span><h2>Nice work out there.</h2><p className="success-subtitle">{round.courseName} · {round.holes.length} holes</p><div className="success-score"><strong>{score}</strong><span>{formatScoreToPar(score - par)} to par · #{rank} personal pace</span></div><div className="metric-grid success-metrics"><div className="metric"><span>FIR</span><strong>{accuracy.fir == null ? "—" : `${accuracy.fir}%`}</strong></div><div className="metric"><span>GIR</span><strong>{accuracy.gir == null ? "—" : `${accuracy.gir}%`}</strong></div><div className="metric"><span>3-PUTT</span><strong>{accuracy.threePutts == null ? "—" : `${accuracy.threePutts}%`}</strong></div></div>{distances.length > 0 && <div className="success-distances"><span className="eyebrow">ON-COURSE DISTANCES</span>{distances.map(([club, distance]) => <span key={club}><b>{club}</b> {distance}m</span>)}</div>}<ArchivedScorecard round={round} /><button className="primary-button" onClick={onClose}>See my progress</button></div></div>;
 }
 
 function RoundDetail({
@@ -2859,7 +2954,10 @@ function RoundDetail({
           <p>{Array.from(new Set(issues)).join(" · ")}</p>
         </section>
       )}
-      <ArchivedScorecard round={{ ...round, holes: editedHoles }} editingHole={editing ? selectedHole : null} onScoreChange={(holeNumber, value) => setScores((current) => current.map((score, index) => editedHoles[index]?.holeNumber === holeNumber ? value : score))} onHoleTap={(holeNumber) => { setSelectedHole(holeNumber); setEditing(true); }} onDeleteHole={(holeNumber) => {
+      <ArchivedScorecard round={{ ...round, holes: editedHoles }} editingHole={editing ? selectedHole : null} onScoreChange={(holeNumber, value) => {
+        setScores((current) => current.map((score, index) => editedHoles[index]?.holeNumber === holeNumber ? value : score));
+        setEditedHoles((current) => current.map((hole) => hole.holeNumber === holeNumber ? { ...hole, score: value } : hole));
+      }} onHoleTap={(holeNumber) => { setSelectedHole(holeNumber); setEditing(true); }} onDeleteHole={(holeNumber) => {
         setEditedHoles((current) => current.filter((hole) => hole.holeNumber !== holeNumber));
         setScores((current) => current.filter((_, index) => editedHoles[index]?.holeNumber !== holeNumber));
         setSelectedHole(null);
@@ -3649,10 +3747,16 @@ function ShotGroups({
   };
   const outcomeOptions: Record<ShotPhase, { good: string[]; bad: string[] }> = {
     tee: {
-      good: par === 3 ? ["Hit green", "Good distance", "Good direction", "Good contact", "Fairway found", "Good decision"] : ["Fairway found", "Good contact", "Good distance", "Good decision"],
+      good: par === 3 ? ["Hit green", "Good distance", "Good direction", "Good contact", "Full shot", "Fairway found", "Good decision"] : ["Fairway found", "Good contact", "Good distance", "Full shot", "Good decision"],
       bad: [
         "Slice",
         "Hook",
+        "Out of bounds",
+        "Water",
+        "Lost ball",
+        "Penalty",
+        "Partial shot",
+        "Roll-out",
         "Missed left",
         "Missed right",
         "Top",
@@ -3662,8 +3766,10 @@ function ShotGroups({
       ],
     },
     approach: {
-      good: ["Hit green", "Good contact", "Good distance", "Good direction"],
+      good: ["Hit green", "Good contact", "Good distance", "Good direction", "Full shot"],
       bad: [
+        "Partial shot",
+        "Roll-out",
         "Short",
         "Long",
         "Left",
