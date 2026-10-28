@@ -10,6 +10,7 @@ import {
   caddiePlan,
   caddieDecision,
   resolveTeeDecision,
+  isTeeEligibleClub,
   adaptiveCaddieDecision,
   isValidGolfShotContext,
   teeRationale,
@@ -84,13 +85,13 @@ describe("personal shot learning evidence", () => {
     expect(findings[0]?.text).toContain("8i");
   });
 
-  it("does not let one same-hole tee result override the baseline", () => {
+  it("keeps Driver as the baseline when it fits the tee distance", () => {
     const readings = [
       ...Array.from({ length: 8 }, (_, i) => ({ id: `dr-${i}`, club: "Dr" as const, distanceMetres: 220, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-20", createdAt: `2026-09-${10 + i}` })),
       ...Array.from({ length: 3 }, (_, i) => ({ id: `3w-${i}`, club: "3W" as const, distanceMetres: 200, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-20", createdAt: `2026-09-${10 + i}` })),
     ];
     const round = { id: "one", date: "2026-09-20", courseName: "Test", courseId: "test-course", tee: "white", overallNote: "", status: "archived" as const, holes: [{ holeNumber: 4, score: 4, focusCategory: "Tee shot" as const, wentRight: "", wentWrong: "", shots: [{ id: "s", phase: "tee" as const, club: "3W" as const, startDistanceToTargetM: 200, outcomes: [{ outcome: "good" as const, note: "Good direction" }] }] }] };
-    const result = resolveTeeDecision(readings, 4, 200, [round], { courseId: "test-course", holeNumber: 4, tee: "white" });
+    const result = resolveTeeDecision(readings, 4, 240, [round], { courseId: "test-course", holeNumber: 4, tee: "white" });
     expect(result?.club).toBe("Dr");
   });
 
@@ -105,6 +106,24 @@ describe("personal shot learning evidence", () => {
     expect(result?.plan.tee.club).toBe("3W");
     expect(result?.plan.sequence[0]?.club).toBe("3W");
     expect(result?.explanation?.primaryClub).toBe("3W");
+  });
+});
+
+describe("tee club rules", () => {
+  it("never treats hybrid or rescue clubs as tee clubs", () => {
+    expect(isTeeEligibleClub("Dr")).toBe(true);
+    expect(isTeeEligibleClub("3W")).toBe(true);
+    expect(isTeeEligibleClub("8i")).toBe(true);
+    expect(isTeeEligibleClub("4W-Hybrid")).toBe(false);
+    expect(isTeeEligibleClub("Rescue")).toBe(false);
+  });
+
+  it("uses an iron for a short par-three tee target when hybrid is closer", () => {
+    const readings = [
+      { id: "hybrid", club: "4W-Hybrid", distanceMetres: 140, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-20", createdAt: "2026-09-20" },
+      { id: "8i", club: "8i", distanceMetres: 138, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-20", createdAt: "2026-09-20" },
+    ];
+    expect(resolveTeeDecision(readings, 3, 139)?.club).toBe("8i");
   });
 });
 
@@ -147,6 +166,28 @@ describe("chronological repeated hole shots", () => {
 
 describe("distance calculations", () => {
   const data = seedData();
+
+  it("shows every recorded GPS shot instead of filtering by range baseline", () => {
+    const round = {
+      id: "gps-round",
+      date: "2026-09-20",
+      courseName: "Test",
+      status: "archived" as const,
+      overallNote: "",
+      holes: [{
+        holeNumber: 1,
+        score: 5,
+        focusCategory: "Tee shot" as const,
+        wentRight: "",
+        wentWrong: "",
+        shots: [
+          { id: "dr-1", phase: "tee" as const, club: "Dr", actualDistanceM: 245 },
+          { id: "dr-2", phase: "tee" as const, club: "Dr", actualDistanceM: 215 },
+        ],
+      }],
+    };
+    expect(onCourseDistanceReadings([round], [{ id: "range", club: "Dr", distanceMetres: 200, mishit: false, sessionDate: "2026-09-20", createdAt: "2026-09-20" }])).toHaveLength(2);
+  });
   it("calculates the median and excludes mishits", () => {
     expect(median([1, 5, 3])).toBe(3);
     const readings = [
@@ -319,9 +360,9 @@ describe("adaptive live caddie", () => {
     expect(resolved?.explanation?.primaryClub).toBe("6i");
   });
 
-  it("allows the pre-hole plan to select an iron off the tee", () => {
+  it("uses Driver for a normal par-four tee when its carry fits", () => {
     const plan = caddiePlan(readings, 4, 300);
-    expect(plan?.tee.club).toBe("6i");
+    expect(plan?.tee.club).toBe("Dr");
   });
 
   it("uses labelled, thresholded tee rationale without overstating tiny differences", () => {
@@ -344,6 +385,11 @@ describe("adaptive live caddie", () => {
     expect(adaptiveCaddieDecision(readings, ["Dr", "6i"], 150, 150, undefined).status).toBe("insufficient-data");
     const result = adaptiveCaddieDecision(readings, ["Dr", "6i"], 150, 150, "fairway");
     expect(result.candidates.find((candidate) => candidate.club === "Dr")?.excluded).toBe(true);
+  });
+
+  it("always selects the putter from a green lie", () => {
+    const result = adaptiveCaddieDecision(readings, ["Dr", "6i"], 12, 12, "green");
+    expect(result).toMatchObject({ recommendedClub: "Putter", status: "recommended" });
   });
 
   it("returns recovery behavior instead of normal green-distance selection", () => {
@@ -567,8 +613,8 @@ describe("putting stats", () => {
   });
 });
 
-describe("on-course distance filtering", () => {
-  it("keeps measured shots within the club baseline buffer", () => {
+describe("on-course distance recording", () => {
+  it("keeps every measured shot even when it differs from range baseline", () => {
     const round = {
       id: "gps", date: "2026-09-20", courseName: "Test", overallNote: "", status: "archived" as const,
       holes: [{ holeNumber: 1, score: 4, focusCategory: "Approach" as const, wentRight: "", wentWrong: "", shots: [
@@ -577,6 +623,6 @@ describe("on-course distance filtering", () => {
       ] }],
     };
     const baseline = [{ id: "range", club: "7i", distanceMetres: 150, mishit: false, sessionDate: "2026-09-19", createdAt: "2026-09-19" }];
-    expect(onCourseDistanceReadings([round], baseline).map((reading) => reading.distanceMetres)).toEqual([145]);
+    expect(onCourseDistanceReadings([round], baseline).map((reading) => reading.distanceMetres)).toEqual([145, 190]);
   });
 });

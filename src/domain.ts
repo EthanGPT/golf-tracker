@@ -775,13 +775,20 @@ export function clubDisplayLabel(club: string) {
   return club;
 }
 
+/** Clubs the player is willing to use from a teeing ground. */
+export function isTeeEligibleClub(club: ClubName) {
+  if (/hybrid|rescue/i.test(club)) return false;
+  if (["PW", "AW", "GW", "SW", "Putter"].includes(club)) return false;
+  return club === "Dr" || /W$/.test(club) || /^\d+i$/.test(club);
+}
+
 export function caddiePlan(
   readings: RangeReading[],
   par: number,
   targetDistance: number,
   rounds: Round[] = [],
 ) {
-  const clubs = CLUBS.map((club) => ({
+  const clubs = [...new Set([...CLUBS, ...readings.map((reading) => reading.club)])].map((club) => ({
     club,
     summary: clubSummary(readings, club),
   })).filter(({ summary }) => summary.typical);
@@ -821,13 +828,23 @@ export function caddiePlan(
     item.carry * (1 - item.severe) ** 2 * (0.85 + item.playable * 0.15);
   // Tee selection evaluates the whole bag. An iron can be the correct tee
   // club when its carry is sufficient and its penalty risk is materially lower.
-  const riskTee = stats
+  const teeStats = stats.filter((item) => isTeeEligibleClub(item.club));
+  const riskTee = teeStats
     .slice()
     .sort((a, b) => teeScore(b) - teeScore(a))[0];
-  // A par 5 defaults to the driver's progress when it has a usable personal
-  // sample. Risk still wins when the driver is genuinely costing shots.
+  // On par 4s and 5s, use Driver whenever its carry fits the hole. Do not let
+  // the risk score turn a normal long tee shot into an iron; woods are the
+  // fallback only when Driver is unavailable or would run through the hole.
   const driver = stats.find((item) => item.club === "Dr");
-  const tee = par === 5 && driver && driver.severe < 0.35 ? driver : riskTee;
+  const driverFitsTee = driver && driver.carry <= targetDistance + 10;
+  const longestNonDriverTee = teeStats
+    .filter((item) => item.club !== "Dr")
+    .sort((a, b) => b.carry - a.carry)[0];
+  const tee = par !== 3 && driver && driverFitsTee
+    ? driver
+    : par !== 3 && longestNonDriverTee
+      ? longestNonDriverTee
+      : riskTee;
   // Driver is a tee club; woods remain available from the fairway for the
   // second shot on a par 5 when the next club does not reach.
   const fairwayClubs = stats.filter(
@@ -840,7 +857,7 @@ export function caddiePlan(
     // to the wind-adjusted target, rather than automatically taking the longest
     // club that stays below it.
     sequence.push(
-      stats.slice().sort((a, b) => {
+      teeStats.slice().sort((a, b) => {
         const score = (item: (typeof stats)[number]) =>
           Math.abs(item.carry - targetDistance) +
           item.severe * targetDistance * 0.5 +
@@ -1026,7 +1043,8 @@ export function resolveTeeDecision(
   const plan = caddiePlan(readings, par, targetDistance, rounds);
   if (!plan) return undefined;
   const explanation = caddieDecision(readings, par, targetDistance, undefined, rounds);
-  const teeCandidates = [...new Set([plan.tee.club, "Dr", "3W", "4W-Hybrid"] as ClubName[])]
+  const teeCandidates = [...new Set([plan.tee.club, ...CLUBS, ...readings.map((reading) => reading.club)] as ClubName[])]
+    .filter((club) => isTeeEligibleClub(club))
     .filter((club) => clubSummary(readings, club).typical !== undefined && isTeeTargetReachable(readings, club, targetDistance));
   const learned = teeCandidates.map((club) => {
     const evidence = getContextEvidence(rounds, { phase: "tee", club, ...context });
@@ -1040,7 +1058,13 @@ export function resolveTeeDecision(
   // matches the target. Risk/playable data is already used by caddiePlan to
   // break ties, while normal tee holes use the broader tee-risk selection.
   const plannedClub = par === 3 ? plan.sequence[0]?.club || plan.tee.club : plan.tee.club;
-  const selectedClub = par !== 3 && learnedBest && learnedBest.score > 0 ? learnedBest.club : plannedClub;
+  const selectedClub = par !== 3
+    ? plannedClub === "Dr"
+      ? "Dr"
+      : learnedBest && learnedBest.score > 0
+        ? learnedBest.club
+        : plannedClub
+    : plannedClub;
   const selectedExplanation = caddieDecision(readings, par, targetDistance, selectedClub, rounds);
   const selectedSummary = clubSummary(readings, selectedClub);
   const selectedTee = selectedSummary.typical === undefined || selectedClub === plan.tee.club
@@ -1066,7 +1090,7 @@ export const ADAPTIVE_CADDIE_V1 = {
   reliabilityWeight: 0.1,
   shortBias: 0.04,
   lieSuitability: {
-    tee: { Dr: 1, "3W": 0.98, "4W-Hybrid": 0.98, iron: 0.95 },
+    tee: { Dr: 1, "3W": 0.98, "4W-Hybrid": 0, iron: 0.95 },
     fairway: { Dr: 0, "3W": 1, "4W-Hybrid": 1, iron: 1 },
     rough: { Dr: 0, "3W": 0, "4W-Hybrid": 0.9, longIron: 0.95, iron: 1 },
     bunker: { Dr: 0, "3W": 0, "4W-Hybrid": 0, longIron: 0.45, iron: 0.9 },
@@ -1078,6 +1102,7 @@ const adaptiveClubKind = (club: ClubName) =>
 
 function lieSuitability(club: ClubName, lie: ShotLie) {
   if (lie === "green") return club === "Putter" ? 1 : 0;
+  if (lie === "tee" && !isTeeEligibleClub(club)) return 0;
   const values = ADAPTIVE_CADDIE_V1.lieSuitability[lie as keyof typeof ADAPTIVE_CADDIE_V1.lieSuitability];
   if (lie === "recovery") return ["6i", "7i", "8i", "9i"].includes(club) ? 1 : 0;
   return values[adaptiveClubKind(club) as keyof typeof values] ?? values.iron ?? 0;
@@ -1117,6 +1142,17 @@ export function adaptiveCaddieDecision(
   rounds: Round[] = [],
   learningContext?: { courseId?: string; holeNumber?: number; tee?: string },
 ): AdaptiveCaddieDecision {
+  if (lie === "green") {
+    return {
+      recommendedClub: "Putter",
+      targetDistanceM,
+      effectiveDistanceM,
+      lie,
+      candidates: [{ club: "Putter", lieSuitability: 1, utility: 1 }],
+      reasons: [{ key: "putting", label: "Reason", value: "Ball is on the green — use the putter.", tone: "positive" }],
+      status: "recommended",
+    };
+  }
   if (!isValidGolfShotContext(targetDistanceM, officialHoleDistanceM, gpsAccuracyM)) {
     const fallback = safeRecoveryClub(readings, bag);
     return {
@@ -1319,19 +1355,15 @@ export function roundTotal(round: Round) {
   return round.holes.reduce((total, hole) => total + (hole.score || 0), 0);
 }
 
-/** Reliable GPS-measured total-travel distances for non-putting shots. */
-export function onCourseDistanceReadings(rounds: Round[], baselineReadings: RangeReading[] = [], toleranceM = 25, includeOutliers = false): RangeReading[] {
+/** GPS-measured total-travel distances for every recorded non-putting shot. */
+export function onCourseDistanceReadings(rounds: Round[], _baselineReadings: RangeReading[] = [], _toleranceM = 25, _includeOutliers = false): RangeReading[] {
   return rounds
     .filter((round) => round.status === "archived")
     .flatMap((round) => round.holes.flatMap((hole) => (hole.shots || [])
       .filter((shot) => {
-        if (shot.phase === "putting" || !shot.club || shot.club === "Putter" || shot.actualDistanceM === undefined || shot.actualDistanceM < 5) return false;
-        const hardMaximum = clubTotalDistanceCeiling(shot.club);
-        const baseline = clubSummary(baselineReadings, shot.club).typical;
-        // The optional wider history tolerance preserves legitimate roll-out
-        // and partial-shot travel, but still blocks late Next Shot clicks.
-        const upperTolerance = includeOutliers ? Math.max(35, toleranceM) : toleranceM;
-        return shot.actualDistanceM <= hardMaximum && (baseline === undefined || shot.actualDistanceM <= baseline + upperTolerance);
+        // This screen is a record of what GPS captured, not a carry-quality
+        // filter. Carry calibration applies its own stricter evidence rules.
+        return shot.phase !== "putting" && Boolean(shot.club) && shot.club !== "Putter" && shot.actualDistanceM !== undefined && Number.isFinite(shot.actualDistanceM) && shot.actualDistanceM >= 5;
       })
       .map((shot) => ({
         id: `on-course-${round.id}-${hole.holeNumber}-${shot.id}`,
@@ -1341,19 +1373,6 @@ export function onCourseDistanceReadings(rounds: Round[], baselineReadings: Rang
         sessionDate: round.date,
         createdAt: round.archivedAt || round.date,
       }))));
-}
-
-function clubTotalDistanceCeiling(club: ClubName) {
-  if (club === "Dr") return 360;
-  if (["3W", "5W"].includes(club)) return 330;
-  if (club === "4W-Hybrid" || /hybrid/i.test(club)) return 300;
-  if (club === "5i") return 250;
-  if (club === "6i") return 235;
-  if (club === "7i") return 220;
-  if (club === "8i") return 205;
-  if (club === "9i") return 190;
-  if (["PW", "AW", "GW", "SW"].includes(club)) return 170;
-  return 280;
 }
 
 /** Putting averages based only on holes where putting shots were recorded. */
