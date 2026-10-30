@@ -43,6 +43,68 @@ export function getCurrentPosition(): Promise<GeoPosition> {
   });
 }
 
+/**
+ * Collects a short burst of fresh GPS fixes and returns their median position.
+ * A single phone GPS fix can be badly offset even when its reported accuracy
+ * looks reasonable; median aggregation removes most of those one-off jumps.
+ */
+export function getStablePosition(options: { minimumSamples?: number; minimumWaitMs?: number; timeoutMs?: number } = {}): Promise<GeoPosition> {
+  const minimumSamples = options.minimumSamples ?? 3;
+  const minimumWaitMs = options.minimumWaitMs ?? 4500;
+  const timeoutMs = options.timeoutMs ?? 8000;
+  if (!navigator.geolocation)
+    return Promise.reject(new LocationError("unsupported"));
+  return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    const samples: GeoPosition[] = [];
+    let watchId: number | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+
+    const finish = (result: GeoPosition | LocationError) => {
+      if (settled) return;
+      settled = true;
+      if (watchId !== undefined) navigator.geolocation.clearWatch(watchId);
+      if (timer !== undefined) clearTimeout(timer);
+      if (result instanceof LocationError) reject(result);
+      else resolve(result);
+    };
+    const median = (values: number[]) => {
+      const sorted = [...values].sort((a, b) => a - b);
+      return sorted[Math.floor(sorted.length / 2)];
+    };
+    const aggregate = (): GeoPosition => ({
+      latitude: median(samples.map((sample) => sample.latitude)),
+      longitude: median(samples.map((sample) => sample.longitude)),
+      accuracyM: median(samples.map((sample) => sample.accuracyM ?? 50)),
+      capturedAt: samples.at(-1)!.capturedAt,
+    });
+    const maybeFinish = () => {
+      if (samples.length >= minimumSamples && Date.now() - startedAt >= minimumWaitMs) finish(aggregate());
+    };
+
+    watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        samples.push({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracyM: position.coords.accuracy,
+          capturedAt: new Date().toISOString(),
+        });
+        maybeFinish();
+      },
+      (error) => {
+        if (error.code === 1) finish(new LocationError("denied"));
+      },
+      { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 0 },
+    );
+    timer = setTimeout(() => {
+      if (samples.length) finish(aggregate());
+      else finish(new LocationError("timeout"));
+    }, timeoutMs);
+  });
+}
+
 export function watchPosition(onPosition: (position: GeoPosition) => void, onError?: (error: LocationError) => void) {
   if (!navigator.geolocation) { onError?.(new LocationError("unsupported")); return () => undefined; }
   const id = navigator.geolocation.watchPosition(

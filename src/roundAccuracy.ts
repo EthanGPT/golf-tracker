@@ -24,7 +24,7 @@ export function fairwayAccuracyStats(rounds: Round[], parForHole: ParForHole) {
       if (!teeOutcomes.length) return;
 
       trackedTeeShots += 1;
-      if (teeOutcomes.some((outcome) => outcome.outcome === "good" && (outcome.note === "Fairway found" || outcome.note === "Hit green"))) {
+      if (teeOutcomes.some((outcome) => outcome.outcome === "good" && (outcome.note === "Fairway" || outcome.note === "Fairway found" || outcome.note === "Hit green"))) {
         fairways += 1;
       }
     }));

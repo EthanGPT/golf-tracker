@@ -25,6 +25,8 @@ import {
   getOnCourseClubAdjustment,
   formMapCategoryStats,
   normalizedRoundScore,
+  normalizedRoundToPar,
+  personalPaceRank,
   roundProgressInsights,
   localDateString,
   ensurePuttingShot,
@@ -110,12 +112,36 @@ describe("personal shot learning evidence", () => {
 });
 
 describe("tee club rules", () => {
-  it("never treats hybrid or rescue clubs as tee clubs", () => {
+  it("allows hybrids and rescue clubs as tee clubs", () => {
     expect(isTeeEligibleClub("Dr")).toBe(true);
     expect(isTeeEligibleClub("3W")).toBe(true);
     expect(isTeeEligibleClub("8i")).toBe(true);
-    expect(isTeeEligibleClub("4W-Hybrid")).toBe(false);
-    expect(isTeeEligibleClub("Rescue")).toBe(false);
+    expect(isTeeEligibleClub("4W-Hybrid")).toBe(true);
+    expect(isTeeEligibleClub("Rescue")).toBe(true);
+  });
+
+  it("can recommend two hybrids when the hole needs both", () => {
+    const readings = Array.from({ length: 5 }, (_, index) => ({
+      id: `hybrid-${index}`, club: "4W-Hybrid", distanceMetres: 175,
+      mishit: false, playable: true, severeMiss: false,
+      sessionDate: "2026-09-20", createdAt: `2026-09-20T00:0${index}:00Z`,
+    }));
+    expect(caddiePlan(readings, 5, 350)?.sequence.map((shot) => shot.club)).toEqual([
+      "4W-Hybrid",
+      "4W-Hybrid",
+    ]);
+  });
+
+  it("can recommend two woods when the hole needs both", () => {
+    const readings = Array.from({ length: 5 }, (_, index) => ({
+      id: `wood-${index}`, club: "3W", distanceMetres: 190,
+      mishit: false, playable: true, severeMiss: false,
+      sessionDate: "2026-09-20", createdAt: `2026-09-20T00:0${index}:00Z`,
+    }));
+    expect(caddiePlan(readings, 5, 380)?.sequence.map((shot) => shot.club)).toEqual([
+      "3W",
+      "3W",
+    ]);
   });
 
   it("uses an iron for a short par-three tee target when hybrid is closer", () => {
@@ -427,6 +453,18 @@ describe("adaptive live caddie", () => {
     expect(result.candidates.find((candidate) => candidate.club === "3W")?.excluded).toBeUndefined();
   });
 
+  it("chooses the longest suitable club when the target needs multiple shots", () => {
+    const longHoleReadings = [
+      { id: "dr", club: "Dr" as const, distanceMetres: 220, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-20", createdAt: "2026-09-20" },
+      { id: "3w", club: "3W" as const, distanceMetres: 190, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-20", createdAt: "2026-09-20" },
+      { id: "hybrid", club: "4W-Hybrid" as const, distanceMetres: 175, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-20", createdAt: "2026-09-20" },
+      { id: "6i", club: "6i" as const, distanceMetres: 150, mishit: false, playable: true, severeMiss: false, sessionDate: "2026-09-20", createdAt: "2026-09-20" },
+    ];
+    const result = adaptiveCaddieDecision(longHoleReadings, ["Dr", "3W", "4W-Hybrid", "6i"], 380, 380, "fairway", 500);
+    expect(result.recommendedClub).toBe("3W");
+    expect(result.reasons.find((reason) => reason.key === "adaptive-fit")?.value).toContain("Longest suitable");
+  });
+
   it("prefers SW for chip-type greenside shots and PW for longer pitches", () => {
     const wedges = [
       ...readings,
@@ -516,6 +554,17 @@ describe("mixed-length round normalization", () => {
   it("converts an 18-hole score to a comparable 9-hole equivalent", () => {
     const round = { id: "r", date: "2026-09-19", courseName: "Test", overallNote: "", status: "archived" as const, totalScore: 90, holes: Array.from({ length: 18 }, (_, index) => ({ holeNumber: index + 1, score: 5, focusCategory: "Approach" as const, wentRight: "", wentWrong: "" })) };
     expect(normalizedRoundScore(round)).toBe(45);
+  });
+
+  it("ranks comparable rounds by score relative to par and shares ties", () => {
+    const holes = Array.from({ length: 9 }, (_, index) => ({ holeNumber: index + 1, score: 4, focusCategory: "Approach" as const, wentRight: "", wentWrong: "" }));
+    const round = (id: string, score: number) => ({ id, date: `2026-09-${id}`, courseName: "Test", courseId: "hermanus-golf-club", overallNote: "", status: "archived" as const, holes: holes.map((hole) => ({ ...hole, score })) });
+    const best = round("01", 3);
+    const tied = round("02", 3);
+    const current = round("03", 4);
+    expect(normalizedRoundToPar(best, 18)).toBeLessThan(normalizedRoundToPar(current, 18)!);
+    expect(personalPaceRank(current, [best, tied, current])).toBe(3);
+    expect(personalPaceRank(tied, [best, tied, current])).toBe(1);
   });
 });
 
@@ -624,5 +673,15 @@ describe("on-course distance recording", () => {
     };
     const baseline = [{ id: "range", club: "7i", distanceMetres: 150, mishit: false, sessionDate: "2026-09-19", createdAt: "2026-09-19" }];
     expect(onCourseDistanceReadings([round], baseline).map((reading) => reading.distanceMetres)).toEqual([145, 190]);
+  });
+
+  it("does not use untagged soft wedge shots to recalibrate full carry", () => {
+    const round = {
+      id: "wedge-gps", date: "2026-09-20", courseName: "Test", overallNote: "", status: "archived" as const,
+      holes: [{ holeNumber: 1, score: 4, focusCategory: "Approach" as const, wentRight: "", wentWrong: "", shots: Array.from({ length: 5 }, (_, index) => ({ id: `pw-${index}`, phase: "approach" as const, club: "PW", actualDistanceM: 70 })) }],
+    };
+    expect(getOnCourseClubAdjustment([round], "PW", 100).adjustmentM).toBe(0);
+    const fullRound = { ...round, id: "full-wedge-gps", holes: [{ ...round.holes[0], shots: round.holes[0].shots!.map((shot) => ({ ...shot, outcomes: [{ outcome: "good" as const, note: "Full shot" }] })) }] };
+    expect(getOnCourseClubAdjustment([fullRound], "PW", 100).adjustmentM).toBe(6);
   });
 });

@@ -1,3 +1,5 @@
+import { holePar } from "./course";
+
 export const CLUBS: ClubName[] = [
   "Dr",
   "3W",
@@ -76,6 +78,8 @@ export type AdaptiveCaddieDecision = {
 export type HoleShot = {
   id: string;
   phase: ShotPhase;
+  /** Placeholder club rows are not strokes until an outcome or GPS segment records them. */
+  recorded?: boolean;
   club?: ClubName;
   outcome?: "good" | "bad";
   note?: string;
@@ -129,6 +133,8 @@ export type TeeOriginObservation = TeeOrigin & {
 export type RoundHole = {
   holeNumber: number;
   score: number;
+  /** True only after the player explicitly saves the hole. */
+  saved?: boolean;
   focusCategory: FocusCategory;
   onGreen?: boolean;
   wentRight: string;
@@ -154,11 +160,11 @@ export function ensurePuttingShot(shots: HoleShot[]) {
   const normalized = shots.map((shot) => shot.phase === "putting" && shot.club !== "Putter" ? { ...shot, club: "Putter" } : shot);
   return normalized.some((shot) => shot.phase === "putting")
     ? normalized
-    : [...normalized, { id: crypto.randomUUID(), phase: "putting" as const, club: "Putter" }];
+    : [...normalized, { id: crypto.randomUUID(), phase: "putting" as const, club: "Putter", recorded: false }];
 }
 
 export function appendHoleShot(shots: HoleShot[], phase: ShotPhase, club?: ClubName) {
-  return [...shots, { id: crypto.randomUUID(), phase, club }];
+  return [...shots, { id: crypto.randomUUID(), phase, club, recorded: false }];
 }
 
 export function updateHoleShot(shots: HoleShot[], shotId: string, update: Partial<HoleShot>) {
@@ -173,6 +179,7 @@ export function enrichShotWithContext(
 ) {
   return {
     ...shot,
+    recorded: true,
     ...(actualDistanceM !== undefined ? { actualDistanceM } : {}),
     startDistanceToTargetM: start.distanceToTargetM,
     endDistanceToTargetM: end.distanceToTargetM,
@@ -270,6 +277,28 @@ export function normalizedRoundScore(round: Round, targetHoles = 9) {
   return playedHoles ? (score / playedHoles) * targetHoles : 0;
 }
 
+/** Comparable round performance, expressed as projected score relative to par. */
+export function normalizedRoundToPar(round: Round, targetHoles = 18) {
+  const scoredHoles = round.holes.filter((hole) => hole.score > 0);
+  if (!scoredHoles.length) return undefined;
+  const scoreToPar = scoredHoles.reduce(
+    (total, hole) => total + hole.score - holePar(hole.holeNumber, round.courseId),
+    0,
+  );
+  return (scoreToPar / scoredHoles.length) * targetHoles;
+}
+
+/** Competition rank shared by the leaderboard and the round-complete recap. */
+export function personalPaceRank(round: Round, rounds: Round[]) {
+  const score = normalizedRoundToPar(round);
+  if (score === undefined) return undefined;
+  const comparable = rounds
+    .filter((item) => item.status === "archived")
+    .map((item) => normalizedRoundToPar(item))
+    .filter((value): value is number => value !== undefined);
+  return 1 + comparable.filter((value) => value < score - 0.0001).length;
+}
+
 export function getOnCourseClubAdjustment(rounds: Round[], club: ClubName, baselineCarryM?: number) {
   const evidence: Array<{ kind: "actual" | "short" | "long" | "good"; value: number }> = [];
   for (const round of rounds) for (const hole of round.holes) for (const shot of hole.shots || []) {
@@ -280,11 +309,13 @@ export function getOnCourseClubAdjustment(rounds: Round[], club: ClubName, basel
     const shotNotes = [shot.note, ...(shot.outcomes || []).map((outcome) => outcome.note)].filter(Boolean).join(" ");
     const partialOrRoll = /partial|lay[- ]?up|chip|pitch|recovery|roll[- ]?out|runner|bump/i.test(shotNotes);
     const explicitlyFull = /full shot|full swing|good contact/i.test(shotNotes);
-    const nearBaseline = baselineCarryM === undefined || Math.abs(shot.actualDistanceM! - baselineCarryM) <= 35;
+    const wedge = /^(?:P|A|G|S)W$/i.test(club);
+    const carryEvidenceAllowed = wedge ? explicitlyFull : explicitlyFull || !shotNotes || !partialOrRoll;
+    const nearBaseline = shot.actualDistanceM !== undefined && (baselineCarryM === undefined || Math.abs(shot.actualDistanceM - baselineCarryM) <= 35);
     // GPS measures total travel, not carry. Only a clean full-shot signal (or
     // an older untagged shot) may gently calibrate carry; partial/rolling shots
     // remain useful for total-distance history but never redefine carry.
-    if (["tee", "approach"].includes(shot.phase) && shot.actualDistanceM !== undefined && shot.actualDistanceM >= 5 && nearBaseline && !partialOrRoll && (explicitlyFull || !shotNotes || !/partial|lay[- ]?up|chip|pitch|recovery|roll[- ]?out|runner|bump/i.test(shotNotes))) {
+    if (["tee", "approach"].includes(shot.phase) && shot.actualDistanceM !== undefined && shot.actualDistanceM >= 5 && nearBaseline && !partialOrRoll && carryEvidenceAllowed) {
       evidence.push({ kind: "actual", value: shot.actualDistanceM });
       continue;
     }
@@ -777,9 +808,8 @@ export function clubDisplayLabel(club: string) {
 
 /** Clubs the player is willing to use from a teeing ground. */
 export function isTeeEligibleClub(club: ClubName) {
-  if (/hybrid|rescue/i.test(club)) return false;
   if (["PW", "AW", "GW", "SW", "Putter"].includes(club)) return false;
-  return club === "Dr" || /W$/.test(club) || /^\d+i$/.test(club);
+  return club === "Dr" || /W$/.test(club) || /hybrid|rescue/i.test(club) || /^\d+i$/.test(club);
 }
 
 export function caddiePlan(
@@ -855,9 +885,11 @@ export function caddiePlan(
   if (par === 3) {
     // Par-three selection is distance-first: choose the reliable carry closest
     // to the wind-adjusted target, rather than automatically taking the longest
-    // club that stays below it.
+    // club that stays below it. Keep hybrids as a longer-hole option, while
+    // preferring irons for short par-three tee shots.
+    const parThreeTeeStats = teeStats.filter((item) => !/hybrid|rescue/i.test(item.club));
     sequence.push(
-      teeStats.slice().sort((a, b) => {
+      (parThreeTeeStats.length ? parThreeTeeStats : teeStats).slice().sort((a, b) => {
         const score = (item: (typeof stats)[number]) =>
           Math.abs(item.carry - targetDistance) +
           item.severe * targetDistance * 0.5 +
@@ -871,19 +903,20 @@ export function caddiePlan(
     remaining -= tee.carry;
     if (par === 5 && remaining > 25) {
       const layup = fairwayClubs
-        .filter((item) => item.club !== tee.club && item.carry <= remaining)
+        .filter((item) => item.carry <= remaining)
         .sort((a, b) => b.carry - a.carry)[0];
       if (layup) {
         sequence.push(layup);
         remaining -= layup.carry;
       }
     }
-    const approach = fairwayClubs
-      .filter((item) => !sequence.some((shot) => shot.club === item.club))
-      .sort(
-        (a, b) => Math.abs(remaining - a.carry) - Math.abs(remaining - b.carry),
-      )[0];
-    if (approach) sequence.push(approach);
+    if (remaining > 25) {
+      const approach = fairwayClubs
+        .sort(
+          (a, b) => Math.abs(remaining - a.carry) - Math.abs(remaining - b.carry),
+        )[0];
+      if (approach) sequence.push(approach);
+    }
   }
   return { tee, sequence };
 }
@@ -1253,19 +1286,26 @@ export function adaptiveCaddieDecision(
       (candidate.contextualScore || 0) * Math.min(8, Math.max(3, effectiveDistanceM * 0.05));
     return score(a) - score(b);
   });
-  const best = distanceFirst[0] || usable.sort((a, b) => (b.utility || -Infinity) - (a.utility || -Infinity))[0];
+  // When no club can reach the current target, distance still decides: use
+  // the longest suitable club so a long hole can be played as a sequence of
+  // full shots. Falling back to utility here could select a short iron simply
+  // because it is safer, even when a wood or hybrid is clearly required.
+  const longestSuitable = usable.slice().sort((a, b) =>
+    (b.carryM || 0) - (a.carryM || 0) || (b.utility || -Infinity) - (a.utility || -Infinity),
+  )[0];
+  const best = distanceFirst[0] || longestSuitable;
   if (!best) return { targetDistanceM, effectiveDistanceM, lie, candidates, reasons: [], status: "no-suitable-club" };
   const reasons: CaddieReason[] = [];
   if (best.carryM !== undefined) reasons.push({ key: "adaptive-carry", label: "Carry", value: `${best.carryM}m carry`, tone: "positive" });
   if (best.playableRate !== undefined) reasons.push({ key: "adaptive-playable", label: "Playable", value: `${Math.round(best.playableRate * 100)}% playable`, tone: "positive" });
   if (best.severeMissRate !== undefined) reasons.push({ key: "adaptive-severe", label: "Severe miss", value: `${Math.round(best.severeMissRate * 100)}% severe miss`, tone: best.severeMissRate > 0.15 ? "warning" : "neutral" });
-  reasons.push({ key: "adaptive-fit", label: "Reason", value: best.carryM && best.carryM >= effectiveDistanceM ? "Shortest reliable club that reaches" : "Best available distance/risk balance", tone: "positive" });
+  reasons.push({ key: "adaptive-fit", label: "Reason", value: best.carryM && best.carryM >= effectiveDistanceM ? "Shortest reliable club that reaches" : "Longest suitable club for the remaining distance", tone: "positive" });
   return { recommendedClub: best.club, targetDistanceM, effectiveDistanceM, lie, candidates, reasons, status: "recommended" };
 }
 
 export function onCourseClubOutcomeRates(rounds: Round[], club: ClubName) {
-  const severePattern = /slice|hook|out of bounds|water|lost ball|penalty|top|topped|poor contact|severe miss/i;
-  const playablePattern = /fairway found|hit green|good contact|good direction|good distance|good decision|good recovery/i;
+  const severePattern = /slice|hook|out of bounds|water|lost ball|penalty|top|topped|poor contact|bad contact|severe miss/i;
+  const playablePattern = /fairway|green|on green|hit green|good contact|good direction|good distance|good decision|good recovery/i;
   const notPlayablePattern = /missed left|missed right|poor direction|poor lie|wrong club|bad decision|rough/i;
   const shots = rounds
     .filter((round) => round.status === "archived")
