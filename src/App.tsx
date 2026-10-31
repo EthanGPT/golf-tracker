@@ -3251,7 +3251,7 @@ function RoundMode({
   const [teePositionStatus, setTeePositionStatus] = useState("");
   const [showAdaptiveWhy, setShowAdaptiveWhy] = useState(false);
   const [shotSelectorResetKey, setShotSelectorResetKey] = useState(0);
-  const [demoGps, setDemoGps] = useState(import.meta.env.DEV);
+  const demoGps = import.meta.env.DEV;
   const [showDistanceHint, setShowDistanceHint] = useState(() => {
     try {
       return window.localStorage.getItem("golf-on-course-distance-hint") !== "remembered";
@@ -3571,11 +3571,6 @@ function RoundMode({
         >
           ← Setup
         </button>
-        {import.meta.env.DEV && (
-          <button type="button" className={`dev-gps-toggle ${demoGps ? "active" : ""}`} onClick={() => setDemoGps((enabled) => !enabled)}>
-            {demoGps ? "Demo GPS on" : "Test GPS"}
-          </button>
-        )}
       </div>
       <div className="round-hole-header">
         <div className="round-hole-identity">

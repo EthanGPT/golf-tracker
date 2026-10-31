@@ -1392,6 +1392,57 @@ select:focus {
   .panel * {
     min-width: 0;
   }
+
+  /* Keep the round details summary inside the viewport on small phones. */
+  .round-detail-screen .round-summary-hero,
+  .round-detail-screen .round-performance-strip {
+    min-width: 0;
+  }
+  .round-detail-screen .round-summary-hero > div,
+  .round-detail-screen .round-performance-strip > div {
+    min-width: 0;
+  }
+  .round-detail-screen .round-summary-hero > div {
+    padding: 11px 9px;
+  }
+  .round-detail-screen .round-summary-hero strong {
+    font-size: 20px;
+  }
+  .round-detail-screen .round-summary-hero .round-summary-score strong {
+    font-size: 29px;
+  }
+  .round-detail-screen .round-performance-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 8px;
+  }
+  .round-detail-screen .round-performance-strip > div {
+    min-width: 0;
+    padding: 9px 5px;
+  }
+  .round-detail-screen .round-performance-strip span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-size: 9px;
+  }
+  .round-detail-screen .round-performance-strip strong {
+    flex: 0 0 auto;
+    font-size: 16px;
+  }
+  .round-detail-screen .round-putting-summary {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    align-items: center;
+  }
+  .round-detail-screen .round-putting-summary > .eyebrow {
+    grid-column: 1 / -1;
+    margin: 0;
+  }
+  .round-detail-screen .round-putting-summary div {
+    min-width: 0;
+    text-align: left;
+  }
+
   .analytics-hero {
     grid-template-columns: minmax(0, 96px) minmax(0, 1fr);
     gap: 10px;
