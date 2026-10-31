@@ -80,6 +80,8 @@ export type HoleShot = {
   phase: ShotPhase;
   /** Placeholder club rows are not strokes until an outcome or GPS segment records them. */
   recorded?: boolean;
+  /** True while the club is still controlled by the live caddie recommendation. */
+  autoSelected?: boolean;
   club?: ClubName;
   outcome?: "good" | "bad";
   note?: string;
@@ -299,7 +301,7 @@ export function personalPaceRank(round: Round, rounds: Round[]) {
   return 1 + comparable.filter((value) => value < score - 0.0001).length;
 }
 
-export function getOnCourseClubAdjustment(rounds: Round[], club: ClubName, baselineCarryM?: number) {
+export function getOnCourseClubAdjustment(rounds: Round[], club: ClubName, baselineCarryM?: number, includeActualDistances = true) {
   const evidence: Array<{ kind: "actual" | "short" | "long" | "good"; value: number }> = [];
   for (const round of rounds) for (const hole of round.holes) for (const shot of hole.shots || []) {
     if (shot.club !== club) continue;
@@ -315,7 +317,7 @@ export function getOnCourseClubAdjustment(rounds: Round[], club: ClubName, basel
     // GPS measures total travel, not carry. Only a clean full-shot signal (or
     // an older untagged shot) may gently calibrate carry; partial/rolling shots
     // remain useful for total-distance history but never redefine carry.
-    if (["tee", "approach"].includes(shot.phase) && shot.actualDistanceM !== undefined && shot.actualDistanceM >= 5 && nearBaseline && !partialOrRoll && carryEvidenceAllowed) {
+    if (includeActualDistances && ["tee", "approach"].includes(shot.phase) && shot.actualDistanceM !== undefined && shot.actualDistanceM >= 5 && nearBaseline && !partialOrRoll && carryEvidenceAllowed) {
       evidence.push({ kind: "actual", value: shot.actualDistanceM });
       continue;
     }
@@ -1234,7 +1236,10 @@ export function adaptiveCaddieDecision(
       const suitability = lieSuitability(club, lie);
       // Let clean on-course tee/approach observations nudge the effective
       // target. Range carry remains the baseline; course evidence adapts it.
-      const onCourse = getOnCourseClubAdjustment(rounds, club, carry);
+      // Use live on-course lengths only when they pass the baseline sanity
+      // guard inside getOnCourseClubAdjustment; obviously short GPS samples
+      // cannot recalibrate the caddie's carry number.
+      const onCourse = getOnCourseClubAdjustment(rounds, club, carry, true);
       const learned = getContextEvidence(rounds, {
         phase: lie === "tee" ? "tee" : "approach",
         club,

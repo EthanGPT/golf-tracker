@@ -49,7 +49,7 @@ export function greenInRegulationStats(rounds: Round[], parForHole: ParForHole) 
       const scoringShots = (hole.shots || []).filter((shot) => shot.phase !== "putting");
       const regulationShots = scoringShots.slice(0, regulationStrokes);
       const hit = regulationShots.some((shot) => outcomesFor(shot)
-        .some((outcome) => outcome.outcome === "good" && (outcome.note === "Hit green" || outcome.note === "Good chip on")));
+        .some((outcome) => outcome.outcome === "good" && (outcome.note === "Green" || outcome.note === "Hit green" || outcome.note === "On green" || outcome.note === "Good chip on")));
 
       // A partial record cannot establish a GIR miss. It stays out of the
       // denominator until the regulation stroke sequence is recorded.

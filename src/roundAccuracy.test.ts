@@ -63,9 +63,18 @@ describe("fairway accuracy", () => {
     };
     const par3Hit = round("par3", 0, 1);
     par3Hit.holes[0].shots![0].outcomes = [{ outcome: "good", note: "Hit green" }];
+    const compactGreen = round("compact-green", 0, 1);
+    compactGreen.holes[0].shots![0].outcomes = [{ outcome: "good", note: "Green" }];
+    const shortGameGreen = round("short-game-green", 0, 1);
+    shortGameGreen.holes[0].shots![0] = {
+      id: "short-game-chip",
+      phase: "short-game",
+      club: "SW",
+      outcomes: [{ outcome: "good", note: "On green" }],
+    };
 
     expect(greenInRegulationStats([par4Partial], () => 4)).toMatchObject({ attempts: 0, greens: 0, gir: null });
-    expect(greenInRegulationStats([par4Hit, par3Hit], (_, hole) => hole.holeNumber === 1 ? 4 : 3)).toMatchObject({ attempts: 2, greens: 2, gir: 100 });
+    expect(greenInRegulationStats([par4Hit, par3Hit, compactGreen, shortGameGreen], (_, hole) => hole.holeNumber === 1 ? 4 : 3)).toMatchObject({ attempts: 4, greens: 4, gir: 100 });
   });
 
   it("groups completed holes into a usable scoring mix", () => {

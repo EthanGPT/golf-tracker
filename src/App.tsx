@@ -70,7 +70,6 @@ import {
   bearingBetween,
   distanceBetweenMeters,
   getCurrentPosition,
-  getStablePosition,
   LocationError,
   TEE_ORIGIN_ACCURACY,
 } from "./geo";
@@ -3251,7 +3250,6 @@ function RoundMode({
   const [teePositionStatus, setTeePositionStatus] = useState("");
   const [showAdaptiveWhy, setShowAdaptiveWhy] = useState(false);
   const [shotSelectorResetKey, setShotSelectorResetKey] = useState(0);
-  const demoGps = import.meta.env.DEV;
   const [showDistanceHint, setShowDistanceHint] = useState(() => {
     try {
       return window.localStorage.getItem("golf-on-course-distance-hint") !== "remembered";
@@ -3262,6 +3260,13 @@ function RoundMode({
   useEffect(() => {
     if (draft) setActiveHole(Math.max(0, draft.currentHoleIndex || 0));
   }, [draft?.id]);
+  useEffect(() => {
+    // Each hole starts with the tee selector closed. Do not carry the phase
+    // that was open on the previous hole into the new hole.
+    setShotSelectorResetKey((key) => key + 1);
+    setNextShotStatus("");
+    setShowAdaptiveWhy(false);
+  }, [activeHole]);
   useEffect(() => {
     if (!draft) return;
     const sequence = draft.courseId === "hermanus-golf-club"
@@ -3363,25 +3368,9 @@ function RoundMode({
     }
     setNextShotStatus("Getting location…");
     try {
-      const position = demoGps
-        ? (() => {
-            const now = new Date().toISOString();
-            const start = teeOrigin || {
-              latitude: target.position.latitude + 0.0022,
-              longitude: target.position.longitude,
-              accuracyM: 5,
-              capturedAt: now,
-            };
-            const base = currentHole.latestShotContext?.position || start;
-            const progress = currentHole.latestShotContext ? 0.38 : 0;
-            return {
-              latitude: base.latitude + (target.position.latitude - base.latitude) * progress,
-              longitude: base.longitude + (target.position.longitude - base.longitude) * progress,
-              accuracyM: 5,
-              capturedAt: now,
-            };
-          })()
-        : await getStablePosition();
+      // The tap must always advance the round immediately. Use the fresh fix
+      // for this shot; any quality refinement must never block lie/club entry.
+      const position = await getCurrentPosition();
       const context = {
         holeNumber,
         position,
@@ -3543,6 +3532,7 @@ function RoundMode({
             phase: context.distanceToTargetM <= 100 ? "short-game" : "approach",
             club: nextRecommendedClub,
             recorded: false,
+            autoSelected: true,
           },
         ];
       }
@@ -3664,11 +3654,7 @@ function RoundMode({
                 type="button"
                 className={currentHole.latestShotContext?.lie === lie ? "active" : ""}
                 aria-pressed={currentHole.latestShotContext?.lie === lie}
-                onClick={() =>
-                  updateHole({
-                    latestShotContext: { ...currentHole.latestShotContext!, lie },
-                  })
-                }
+                onClick={() => updateHole({ latestShotContext: { ...currentHole.latestShotContext!, lie } })}
               >
                 {lie === "recovery" ? "Trouble" : lie[0].toUpperCase() + lie.slice(1)}
               </button>
@@ -3768,6 +3754,7 @@ function RoundMode({
         </label>
         <ShotGroups
           bag={bag}
+          holeNumber={holeNumber}
           shots={currentHole.shots || []}
           setShots={(shots) => updateHole({
             shots,
@@ -3939,6 +3926,7 @@ function Caddie({
 
 function ShotGroups({
   bag,
+  holeNumber,
   shots,
   setShots,
   onOutcome,
@@ -3949,6 +3937,7 @@ function ShotGroups({
   selectorResetKey,
 }: {
   bag?: ClubName[];
+  holeNumber?: number;
   shots: HoleShot[];
   setShots: (shots: HoleShot[]) => void;
   onOutcome?: (phase: ShotPhase, note: string, selected: boolean) => void;
@@ -4010,7 +3999,7 @@ function ShotGroups({
     if (phase === "tee") return par === 3
       ? ["Green", "Short", "Left", "Right", "Slice", "Hook", "Bad contact", "Penalty"].map((note, index) => ({ note, outcome: index < 1 ? "good" : "bad" }))
       : ["Fairway", "Left", "Right", "Slice", "Hook", "Bad contact", "Penalty"].map((note, index) => ({ note, outcome: index < 1 ? "good" : "bad" }));
-    if (phase === "approach") return ["Green", "Fairway", "Short", "Long", "Left", "Right", "Penalty"].map((note, index) => ({ note, outcome: index < 2 ? "good" : "bad" }));
+    if (phase === "approach") return ["Green", "Fairway", "Short", "Long", "Left", "Right", "Slice", "Hook", "Penalty"].map((note, index) => ({ note, outcome: index < 2 ? "good" : "bad" }));
     if (phase === "short-game") return ["On green", "Short", "Long", "Left", "Right", "Penalty"].map((note, index) => ({ note, outcome: index < 1 ? "good" : "bad" }));
     if (phase === "putting") return ["1 putt", "2 putt", "3 putt", "Pushed", "Pulled", "Missed short putt"].map((note, index) => ({ note, outcome: index < 2 ? "good" : "bad" }));
     return [];
@@ -4049,13 +4038,16 @@ function ShotGroups({
         }
       }
       const pending = nextShots.filter((shot) => shot.phase === phase).at(-1);
-      if (pending && !pending.club && pending.actualDistanceM === undefined && pending.startDistanceToTargetM === undefined) {
-        nextShots = updateHoleShot(nextShots, pending.id, { club });
+      if (pending && pending.actualDistanceM === undefined && pending.startDistanceToTargetM === undefined && (!pending.club || pending.autoSelected) && pending.club !== club) {
+        nextShots = updateHoleShot(nextShots, pending.id, { club, autoSelected: true });
       }
     });
     const additions = Object.entries(desired).filter(([phase, club]) => {
       if (!club) return false;
-      if (!nextShots.some((shot) => shot.phase === phase)) return true;
+      // Recommendations fill pending rows created by the round flow; they
+      // should not create a new row merely because a phase was opened. This
+      // lets the player clear an accidental approach row.
+      if (!nextShots.some((shot) => shot.phase === phase)) return false;
 
       // A live caddie recommendation represents the next shot. Once the
       // current shot in that phase has been recorded, add a new entry so a
@@ -4079,14 +4071,18 @@ function ShotGroups({
     if (selectorResetKey === undefined) return;
     setActivePhase(null);
   }, [selectorResetKey]);
+  useEffect(() => {
+    if (holeNumber === undefined) return;
+    setActivePhase("tee");
+  }, [holeNumber]);
   const toggle = (shotId: string, phase: ShotPhase, club: string) => {
     setActivePhase(phase);
     refocusSelector();
     const existing = shots.find((shot) => shot.id === shotId);
     if (!existing) return;
     if (existing.club === club)
-      return setShots(updateHoleShot(shots, shotId, { club: undefined }));
-    setShots(updateHoleShot(shots, shotId, { club }));
+      return setShots(updateHoleShot(shots, shotId, { club: undefined, autoSelected: false }));
+    setShots(updateHoleShot(shots, shotId, { club, autoSelected: false }));
   };
   const addShot = (phase: ShotPhase, club?: ClubName) => {
     setActivePhase(phase);
